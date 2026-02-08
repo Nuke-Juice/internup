@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { supabaseServer } from '@/lib/supabase/server'
 import { requireRole } from '@/lib/auth/requireRole'
@@ -16,7 +17,7 @@ export default async function ApplyPage({
   params: Promise<{ listingId: string }>
   searchParams?: { error?: string }
 }) {
-  const { user } = await requireRole('student')
+  await requireRole('student')
   const { listingId } = await params
   const supabase = await supabaseServer()
 
@@ -30,9 +31,9 @@ export default async function ApplyPage({
     return (
       <main className="min-h-screen bg-white px-6 py-12">
         <div className="mx-auto max-w-3xl">
-          <a href="/jobs" className="text-sm font-medium text-blue-700 hover:underline">
+          <Link href="/jobs" className="text-sm font-medium text-blue-700 hover:underline">
             ← Back to jobs
-          </a>
+          </Link>
 
           <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-6">
             <h1 className="text-xl font-semibold text-slate-900">Listing not found</h1>
@@ -49,7 +50,11 @@ export default async function ApplyPage({
     'use server'
 
     const { user: currentUser } = await requireRole('student')
+    if (!listing) {
+    throw new Error("Listing not found")
+    }
     const listingIdForSubmit = listing.id
+
     const file = formData.get('resume') as File | null
 
     if (!listingIdForSubmit || !file) {
@@ -73,8 +78,8 @@ export default async function ApplyPage({
       redirect(`/apply/${listingId}?error=You+already+applied+to+this+internship`)
     }
 
-    const timestamp = Date.now()
-    const path = `resumes/${currentUser.id}/${listingIdForSubmit}/${timestamp}.pdf`
+    const resumeId = crypto.randomUUID()
+    const path = `resumes/${currentUser.id}/${listingIdForSubmit}/${resumeId}.pdf`
     const { error: uploadError } = await supabaseAction.storage
       .from('resumes')
       .upload(path, file, { contentType: 'application/pdf', upsert: false })
@@ -100,9 +105,9 @@ export default async function ApplyPage({
   return (
     <main className="min-h-screen bg-white px-6 py-12">
       <div className="mx-auto max-w-3xl">
-        <a href="/jobs" className="text-sm font-medium text-blue-700 hover:underline">
+        <Link href="/jobs" className="text-sm font-medium text-blue-700 hover:underline">
           ← Back to jobs
-        </a>
+        </Link>
 
         <h1 className="mt-4 text-2xl font-semibold text-slate-900">Apply</h1>
         <p className="mt-2 text-slate-600">Submit your resume for this internship.</p>

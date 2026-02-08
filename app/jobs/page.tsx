@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { supabaseServer } from '@/lib/supabase/server'
 import ApplyButton from './_components/ApplyButton'
 import { calculateMatchScore, parseMajors } from '@/lib/jobs/matching'
@@ -87,24 +88,24 @@ export default async function JobsPage() {
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-2">
             <div className="h-9 w-9 rounded-lg bg-blue-600" aria-hidden />
-            <a href="/" className="text-sm font-semibold tracking-tight text-slate-900">
+            <Link href="/" className="text-sm font-semibold tracking-tight text-slate-900">
               InternUP
-            </a>
+            </Link>
           </div>
 
           <nav className="flex items-center gap-2">
-            <a
+            <Link
               href="/login"
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               Log in
-            </a>
-            <a
+            </Link>
+            <Link
               href="/signup/student"
               className="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
               Create account
-            </a>
+            </Link>
           </nav>
         </div>
       </header>
@@ -181,9 +182,9 @@ export default async function JobsPage() {
                   </div>
 
                   <div className="mt-5 flex items-center justify-between gap-3">
-                    <a href={`/jobs/${listing.id}`} className="text-sm font-medium text-blue-700 hover:underline">
+                    <Link href={`/jobs/${listing.id}`} className="text-sm font-medium text-blue-700 hover:underline">
                       View details
-                    </a>
+                    </Link>
                     <ApplyButton listingId={listing.id} isAuthenticated={Boolean(user)} />
                   </div>
                 </div>

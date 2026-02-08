@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useState } from 'react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 
@@ -23,10 +24,10 @@ export default function StudentSignupPage() {
   const [year, setYear] = useState('Freshman')
   const [majorsText, setMajorsText] = useState('')
   const [coursework, setCoursework] = useState<string[]>([])
-  const [experience, setExperience] = useState<'none' | 'projects' | 'internship'>('none')
-  const [startMonth, setStartMonth] = useState('May')
-  const [hoursPerWeek, setHoursPerWeek] = useState('15')
-  const [interests, setInterests] = useState('')
+  const experience: 'none' | 'projects' | 'internship' = 'none'
+  const startMonth = 'May'
+  const hoursPerWeek = '15'
+  const interests = ''
 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -92,9 +93,9 @@ export default function StudentSignupPage() {
   return (
     <main className="min-h-screen bg-white px-6 py-12">
       <div className="mx-auto max-w-3xl">
-        <a href="/" className="text-sm font-medium text-blue-700 hover:underline">
+        <Link href="/" className="text-sm font-medium text-blue-700 hover:underline">
           ← Back
-        </a>
+        </Link>
 
         <h1 className="mt-4 text-2xl font-semibold text-slate-900">Student signup</h1>
         <p className="mt-2 text-slate-600">Create your account to see curated internships.</p>

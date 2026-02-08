@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useState } from 'react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 
@@ -74,9 +75,9 @@ export default function EmployerSignupPage() {
       <div className="mx-auto max-w-3xl">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <a href="/" className="text-sm font-medium text-blue-700 hover:underline">
+            <Link href="/" className="text-sm font-medium text-blue-700 hover:underline">
               ← Back
-            </a>
+            </Link>
             <h1 className="mt-3 text-2xl font-semibold text-slate-900">
               Employer profile
             </h1>
@@ -169,12 +170,12 @@ export default function EmployerSignupPage() {
               </p>
 
               <div className="flex gap-3">
-                <a
+                <Link
                   href="/"
                   className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                 >
                   Cancel
-                </a>
+                </Link>
                 <button
                   type="button"
                   onClick={createAccount}

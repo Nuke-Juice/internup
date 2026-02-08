@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { requireRole } from '@/lib/auth/requireRole'
 import { supabaseServer } from '@/lib/supabase/server'
@@ -49,7 +50,6 @@ export default async function EmployerDashboardPage({
 
     const { user: currentUser } = await requireRole('employer')
     const title = String(formData.get('title') ?? '').trim()
-    const companyName = String(formData.get('company_name') ?? '').trim()
     const location = String(formData.get('location') ?? '').trim()
     const description = String(formData.get('description') ?? '').trim()
     const experienceLevel = String(formData.get('experience_level') ?? '').trim()
@@ -82,18 +82,18 @@ export default async function EmployerDashboardPage({
         <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-2">
             <div className="h-9 w-9 rounded-lg bg-blue-600" aria-hidden />
-            <a href="/" className="text-sm font-semibold tracking-tight text-slate-900">
+            <Link href="/" className="text-sm font-semibold tracking-tight text-slate-900">
               InternUP
-            </a>
+            </Link>
           </div>
 
           <nav className="flex items-center gap-2">
-            <a
+            <Link
               href="/jobs"
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               View public listings
-            </a>
+            </Link>
             <form action={logout}>
               <button
                 type="submit"

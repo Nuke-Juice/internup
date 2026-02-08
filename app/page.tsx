@@ -1,3 +1,5 @@
+import Link from 'next/link'
+
 export default function HomePage() {
   return (
     <main className="min-h-screen bg-white">
@@ -12,30 +14,30 @@ export default function HomePage() {
           </div>
 
           <nav className="flex items-center gap-2">
-            <a
+            <Link
               href="/jobs"
               className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               Browse jobs
-            </a>
-            <a
+            </Link>
+            <Link
               href="/login"
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               Log in
-            </a>
-            <a
+            </Link>
+            <Link
               href="/signup/employer"
               className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               Employers
-            </a>
-            <a
+            </Link>
+            <Link
               href="/signup/student"
               className="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
               Join as a Student
-            </a>
+            </Link>
           </nav>
         </div>
       </header>
@@ -59,18 +61,18 @@ export default function HomePage() {
             </p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <a
+              <Link
                 href="/jobs"
                 className="inline-flex items-center justify-center rounded-md bg-blue-600 px-5 py-3 text-sm font-medium text-white hover:bg-blue-700"
               >
                 Browse internships
-              </a>
-              <a
+              </Link>
+              <Link
                 href="/signup/employer"
                 className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-5 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50"
               >
                 Create employer account
-              </a>
+              </Link>
             </div>
 
             <p className="mt-4 text-sm text-slate-500">

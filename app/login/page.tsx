@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { supabaseServer } from '@/lib/supabase/server'
 
@@ -53,9 +54,9 @@ export default function LoginPage({
   return (
     <main className="min-h-screen bg-white px-6 py-12">
       <div className="mx-auto max-w-md">
-        <a href="/" className="text-sm font-medium text-blue-700 hover:underline">
+        <Link href="/" className="text-sm font-medium text-blue-700 hover:underline">
           â† Back
-        </a>
+        </Link>
 
         <h1 className="mt-4 text-2xl font-semibold text-slate-900">Log in</h1>
         <p className="mt-2 text-slate-600">Use the email and password you created at signup.</p>
@@ -97,13 +98,13 @@ export default function LoginPage({
 
           <p className="text-xs text-slate-500">
             Donâ€™t have an account?{' '}
-            <a className="text-blue-700 hover:underline" href="/signup/student">
+            <Link className="text-blue-700 hover:underline" href="/signup/student">
               Student signup
-            </a>{' '}
+            </Link>{' '}
             or{' '}
-            <a className="text-blue-700 hover:underline" href="/signup/employer">
+            <Link className="text-blue-700 hover:underline" href="/signup/employer">
               Employer signup
-            </a>
+            </Link>
             .
           </p>
         </form>

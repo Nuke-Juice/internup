@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { supabaseServer } from '@/lib/supabase/server'
 import ApplyButton from '../_components/ApplyButton'
 
@@ -29,9 +30,9 @@ export default async function JobDetailPage({
     return (
       <main className="min-h-screen bg-white px-6 py-12">
         <div className="mx-auto max-w-3xl">
-          <a href="/jobs" className="text-sm font-medium text-blue-700 hover:underline">
+          <Link href="/jobs" className="text-sm font-medium text-blue-700 hover:underline">
             Back to jobs
-          </a>
+          </Link>
 
           <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-6">
             <h1 className="text-xl font-semibold text-slate-900">Job not found</h1>
@@ -47,9 +48,9 @@ export default async function JobDetailPage({
   return (
     <main className="min-h-screen bg-white px-6 py-12">
       <div className="mx-auto max-w-3xl">
-        <a href="/jobs" className="text-sm font-medium text-blue-700 hover:underline">
+        <Link href="/jobs" className="text-sm font-medium text-blue-700 hover:underline">
           Back to jobs
-        </a>
+        </Link>
 
         <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="space-y-1">

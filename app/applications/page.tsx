@@ -13,7 +13,7 @@ function ProgressBar({ status }: { status: Status }) {
     )
   }
 
-  const idx = steps.indexOf(status as any)
+  const idx = steps.indexOf(status)
   const pct = idx >= 0 ? ((idx + 1) / steps.length) * 100 : 25
 
   return (

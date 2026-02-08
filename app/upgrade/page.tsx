@@ -1,3 +1,5 @@
+import Link from 'next/link'
+
 const mockListings = [
   {
     id: '1',
@@ -57,24 +59,24 @@ export default function DashboardPage() {
         <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-2">
             <div className="h-9 w-9 rounded-lg bg-blue-600" aria-hidden />
-            <a href="/" className="text-sm font-semibold tracking-tight text-slate-900">
+            <Link href="/" className="text-sm font-semibold tracking-tight text-slate-900">
               InternUP
-            </a>
+            </Link>
           </div>
 
           <nav className="flex items-center gap-2">
-            <a
+            <Link
               href="/applications"
               className="rounded-md px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               Applications
-            </a>
-            <a
+            </Link>
+            <Link
               href="/upgrade"
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               Upgrade
-            </a>
+            </Link>
           </nav>
         </div>
       </header>
@@ -89,18 +91,18 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex gap-2">
-            <a
+            <Link
               href="/signup/student"
               className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               Edit profile
-            </a>
-            <a
+            </Link>
+            <Link
               href="/upgrade"
               className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
               Upgrade to Verified
-            </a>
+            </Link>
           </div>
         </div>
 
@@ -134,15 +136,15 @@ export default function DashboardPage() {
               </div>
 
               <div className="mt-5 flex items-center justify-between">
-                <a
+                <Link
                   className="text-sm font-medium text-blue-700 hover:underline"
                   href={`/apply/${l.id}`}
                 >
                   Apply
-                </a>
-                <a className="text-sm text-slate-600 hover:underline" href="/applications">
+                </Link>
+                <Link className="text-sm text-slate-600 hover:underline" href="/applications">
                   Track
-                </a>
+                </Link>
               </div>
             </div>
           ))}
