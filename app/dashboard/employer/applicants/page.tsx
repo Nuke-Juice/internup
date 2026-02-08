@@ -1,0 +1,250 @@
+import Link from 'next/link'
+import { redirect } from 'next/navigation'
+import { trackAnalyticsEvent } from '@/lib/analytics'
+import { requireRole } from '@/lib/auth/requireRole'
+import { supabaseServer } from '@/lib/supabase/server'
+import ApplicantsInboxGroup from '@/app/dashboard/employer/_components/ApplicantsInboxGroup'
+import ApplicantsSortControls, { type ApplicantsSort } from '@/app/dashboard/employer/_components/ApplicantsSortControls'
+
+type SearchParams = Promise<{ sort?: string; updated?: string; error?: string }>
+
+type ApplicationStatus = 'submitted' | 'reviewing' | 'interview' | 'rejected' | 'accepted'
+
+type ApplicationRow = {
+  id: string
+  internship_id: string
+  student_id: string
+  created_at: string | null
+  match_score: number | null
+  match_reasons: unknown
+  resume_url: string | null
+  status: string | null
+  reviewed_at: string | null
+  notes: string | null
+}
+
+function normalizeSort(value: string | undefined): ApplicantsSort {
+  return value === 'applied_at' ? 'applied_at' : 'match_score'
+}
+
+function normalizeStatus(value: string | null): ApplicationStatus {
+  if (value === 'reviewing' || value === 'interview' || value === 'rejected' || value === 'accepted') return value
+  return 'submitted'
+}
+
+function parseReasons(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+}
+
+function applicantName(studentId: string) {
+  return `Applicant ${studentId.slice(0, 8)}`
+}
+
+function formatMajor(value: string[] | string | null | undefined) {
+  if (Array.isArray(value)) return value[0] ?? 'Major not set'
+  if (typeof value === 'string' && value.trim()) return value
+  return 'Major not set'
+}
+
+export default async function EmployerApplicantsPage({ searchParams }: { searchParams?: SearchParams }) {
+  const { user } = await requireRole('employer')
+  const resolvedSearchParams = searchParams ? await searchParams : undefined
+  const sort = normalizeSort(resolvedSearchParams?.sort)
+  const supabase = await supabaseServer()
+
+  await trackAnalyticsEvent({
+    eventName: 'employer_open_applicants_inbox',
+    userId: user.id,
+    properties: { sort },
+  })
+
+  const { data: internships } = await supabase
+    .from('internships')
+    .select('id, title')
+    .eq('employer_id', user.id)
+    .order('created_at', { ascending: false })
+
+  const internshipIds = (internships ?? []).map((row) => row.id)
+
+  let applications: ApplicationRow[] = []
+  if (internshipIds.length > 0) {
+    let query = supabase
+      .from('applications')
+      .select('id, internship_id, student_id, created_at, match_score, match_reasons, resume_url, status, reviewed_at, notes')
+      .in('internship_id', internshipIds)
+
+    if (sort === 'match_score') {
+      query = query.order('match_score', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false })
+    } else {
+      query = query.order('created_at', { ascending: false }).order('match_score', { ascending: false, nullsFirst: false })
+    }
+
+    const { data } = await query
+    applications = (data ?? []) as ApplicationRow[]
+  }
+
+  const studentIds = Array.from(new Set(applications.map((row) => row.student_id)))
+  const { data: profiles } =
+    studentIds.length > 0
+      ? await supabase.from('student_profiles').select('user_id, school, majors, year').in('user_id', studentIds)
+      : { data: [] as Array<{ user_id: string; school: string | null; majors: string[] | string | null; year: string | null }> }
+
+  const profileByStudentId = new Map(
+    (profiles ?? []).map((profile) => [
+      profile.user_id,
+      {
+        school: profile.school ?? 'University not set',
+        major: formatMajor(profile.majors),
+        year: profile.year ?? 'Grad year not set',
+      },
+    ])
+  )
+
+  const uniqueResumePaths = Array.from(new Set(applications.map((row) => row.resume_url).filter(Boolean))) as string[]
+  const signedResumeEntries = await Promise.all(
+    uniqueResumePaths.map(async (path) => {
+      const { data } = await supabase.storage.from('resumes').createSignedUrl(path, 60 * 60)
+      return [path, data?.signedUrl ?? null] as const
+    })
+  )
+  const signedResumeUrlByPath = new Map(signedResumeEntries)
+
+  const groups = (internships ?? []).map((internship) => {
+    const applicants = applications
+      .filter((application) => application.internship_id === internship.id)
+      .map((application) => {
+        const profile = profileByStudentId.get(application.student_id)
+        return {
+          id: `${internship.id}-${application.id}`,
+          applicationId: application.id,
+          studentId: application.student_id,
+          applicantName: applicantName(application.student_id),
+          university: profile?.school ?? 'University not set',
+          major: profile?.major ?? 'Major not set',
+          graduationYear: profile?.year ?? 'Grad year not set',
+          appliedAt: application.created_at,
+          matchScore: application.match_score,
+          topReasons: parseReasons(application.match_reasons).slice(0, 2),
+          resumeUrl: application.resume_url ? signedResumeUrlByPath.get(application.resume_url) ?? null : null,
+          status: normalizeStatus(application.status),
+          notes: application.notes ?? null,
+        }
+      })
+
+    return {
+      internshipId: internship.id,
+      internshipTitle: internship.title ?? 'Internship',
+      applicants,
+    }
+  })
+
+  async function updateApplication(formData: FormData) {
+    'use server'
+
+    const { user: currentUser } = await requireRole('employer')
+    const applicationId = String(formData.get('application_id') ?? '').trim()
+    const internshipId = String(formData.get('internship_id') ?? '').trim()
+    const status = String(formData.get('status') ?? '').trim()
+    const notes = String(formData.get('notes') ?? '').trim()
+
+    if (!applicationId || !internshipId) {
+      redirect('/dashboard/employer/applicants?error=Missing+application+context')
+    }
+
+    const allowedStatuses = new Set<ApplicationStatus>([
+      'submitted',
+      'reviewing',
+      'interview',
+      'rejected',
+      'accepted',
+    ])
+    const nextStatus = (allowedStatuses.has(status as ApplicationStatus) ? status : 'submitted') as ApplicationStatus
+
+    const actionSupabase = await supabaseServer()
+    const { data: internship } = await actionSupabase
+      .from('internships')
+      .select('id')
+      .eq('id', internshipId)
+      .eq('employer_id', currentUser.id)
+      .maybeSingle()
+
+    if (!internship?.id) {
+      redirect('/dashboard/employer/applicants?error=Not+authorized+to+update+that+application')
+    }
+
+    const { error } = await actionSupabase
+      .from('applications')
+      .update({
+        status: nextStatus,
+        notes: notes || null,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq('id', applicationId)
+      .eq('internship_id', internshipId)
+
+    if (error) {
+      redirect(`/dashboard/employer/applicants?error=${encodeURIComponent(error.message)}`)
+    }
+
+    await trackAnalyticsEvent({
+      eventName: 'employer_mark_application_reviewed',
+      userId: currentUser.id,
+      properties: { internship_id: internshipId, application_id: applicationId, status: nextStatus },
+    })
+
+    redirect(`/dashboard/employer/applicants?sort=${sort}&updated=1`)
+  }
+
+  return (
+    <main className="min-h-screen bg-white">
+      <section className="mx-auto max-w-6xl px-6 py-10">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <Link href="/dashboard/employer" className="text-sm font-medium text-blue-700 hover:underline">
+              Back to employer dashboard
+            </Link>
+            <h1 className="mt-2 text-2xl font-semibold text-slate-900">Applicant inbox</h1>
+            <p className="mt-1 text-sm text-slate-600">
+              Review applicants by internship and move them through your hiring workflow.
+            </p>
+          </div>
+          <ApplicantsSortControls currentSort={sort} />
+        </div>
+
+        {resolvedSearchParams?.error ? (
+          <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {decodeURIComponent(resolvedSearchParams.error)}
+          </div>
+        ) : null}
+        {resolvedSearchParams?.updated ? (
+          <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+            Application updated.
+          </div>
+        ) : null}
+
+        {groups.length === 0 ? (
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+            No internships found yet. Create an internship first to receive applicants.
+          </div>
+        ) : groups.every((group) => group.applicants.length === 0) ? (
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+            No applications yet.
+          </div>
+        ) : (
+          <div className="mt-6 space-y-6">
+            {groups.map((group) => (
+              <ApplicantsInboxGroup
+                key={group.internshipId}
+                internshipId={group.internshipId}
+                internshipTitle={group.internshipTitle}
+                applicants={group.applicants}
+                onUpdate={updateApplication}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+    </main>
+  )
+}

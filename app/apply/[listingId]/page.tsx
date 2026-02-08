@@ -2,6 +2,19 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { supabaseServer } from '@/lib/supabase/server'
 import { requireRole } from '@/lib/auth/requireRole'
+import { trackAnalyticsEvent } from '@/lib/analytics'
+import {
+  APPLY_ERROR,
+  isDuplicateApplicationConstraintError,
+  type ApplyErrorCode,
+} from '@/lib/applyErrors'
+import { buildAccountRecoveryHref } from '@/lib/applyRecovery'
+import {
+  getMinimumProfileCompleteness,
+  getMinimumProfileFieldLabel,
+  normalizeMissingProfileFields,
+} from '@/lib/profileCompleteness'
+import { buildApplicationMatchSnapshot } from '@/lib/applicationMatchSnapshot'
 import ApplyForm from './ApplyForm'
 
 function formatMajors(value: string[] | string | null) {
@@ -10,20 +23,83 @@ function formatMajors(value: string[] | string | null) {
   return value
 }
 
+function getApplyErrorDisplay(searchParams?: { code?: string; missing?: string; error?: string }) {
+  const code = searchParams?.code as ApplyErrorCode | undefined
+
+  if (code === APPLY_ERROR.ROLE_NOT_STUDENT) {
+    return { message: 'This account is not a student account. Use a student account to apply.', missing: [] as string[] }
+  }
+
+  if (code === APPLY_ERROR.RESUME_REQUIRED) {
+    return { message: 'Please upload a PDF resume or add one to your profile before applying.', missing: [] as string[] }
+  }
+
+  if (code === APPLY_ERROR.INVALID_RESUME_FILE) {
+    return { message: 'Resume must be a PDF.', missing: [] as string[] }
+  }
+
+  if (code === APPLY_ERROR.DUPLICATE_APPLICATION) {
+    return { message: 'You already applied to this internship.', missing: [] as string[] }
+  }
+
+  if (code === APPLY_ERROR.AUTH_REQUIRED) {
+    return { message: 'Please sign in to apply.', missing: [] as string[] }
+  }
+
+  if (code === APPLY_ERROR.LISTING_NOT_FOUND) {
+    return { message: 'Listing not found.', missing: [] as string[] }
+  }
+
+  if (code === APPLY_ERROR.APPLICATION_INSERT_FAILED) {
+    return { message: 'Could not submit your application right now. Please try again.', missing: [] as string[] }
+  }
+
+  if (code === APPLY_ERROR.PROFILE_INCOMPLETE) {
+    const missing = normalizeMissingProfileFields(searchParams?.missing)
+    return {
+      message: 'Profile is incomplete. Add the missing fields below before applying:',
+      missing: missing.map((field) => getMinimumProfileFieldLabel(field)),
+    }
+  }
+
+  if (searchParams?.error) {
+    return { message: decodeURIComponent(searchParams.error), missing: [] as string[] }
+  }
+
+  return null
+}
+
 export default async function ApplyPage({
   params,
   searchParams,
 }: {
   params: Promise<{ listingId: string }>
-  searchParams?: { error?: string }
+  searchParams?: { error?: string; code?: string; missing?: string; recovery?: string }
 }) {
   await requireRole('student')
   const { listingId } = await params
   const supabase = await supabaseServer()
+  const {
+    data: { user: authUser },
+  } = await supabase.auth.getUser()
+  const authMetadata = (authUser?.user_metadata ?? {}) as {
+    resume_path?: string
+    resume_file_name?: string
+  }
+  const savedResumePath =
+    typeof authMetadata.resume_path === 'string' && authMetadata.resume_path.trim()
+      ? authMetadata.resume_path.trim()
+      : ''
+  const savedResumeFileName =
+    typeof authMetadata.resume_file_name === 'string' && authMetadata.resume_file_name.trim()
+      ? authMetadata.resume_file_name.trim()
+      : null
 
   const { data: listing } = await supabase
     .from('internships')
-    .select('id, title, company_name, location, experience_level, majors, description')
+    .select(
+      'id, title, company_name, location, experience_level, majors, description, work_mode, term, role_category, required_skills, preferred_skills, hours_per_week'
+    )
     .eq('id', listingId)
     .single()
 
@@ -49,24 +125,70 @@ export default async function ApplyPage({
   async function submitApplication(formData: FormData) {
     'use server'
 
-    const { user: currentUser } = await requireRole('student')
-    if (!listing) {
-    throw new Error("Listing not found")
+    const supabaseAction = await supabaseServer()
+    const {
+      data: { user: currentUser },
+    } = await supabaseAction.auth.getUser()
+
+    if (!currentUser) {
+      await trackAnalyticsEvent({
+        eventName: 'apply_blocked',
+        userId: null,
+        properties: { listing_id: listingId, code: APPLY_ERROR.AUTH_REQUIRED, missing: [] },
+      })
+      redirect(`/apply/${listingId}?code=${APPLY_ERROR.AUTH_REQUIRED}`)
     }
+
+    const { data: currentUserRow } = await supabaseAction.from('users').select('role').eq('id', currentUser.id).maybeSingle()
+    if (!currentUserRow || currentUserRow.role !== 'student') {
+      await trackAnalyticsEvent({
+        eventName: 'apply_blocked',
+        userId: currentUser.id,
+        properties: { listing_id: listingId, code: APPLY_ERROR.ROLE_NOT_STUDENT, missing: [] },
+      })
+      redirect(`/apply/${listingId}?code=${APPLY_ERROR.ROLE_NOT_STUDENT}`)
+    }
+
+    if (!listing) {
+      await trackAnalyticsEvent({
+        eventName: 'apply_blocked',
+        userId: currentUser.id,
+        properties: { listing_id: listingId, code: APPLY_ERROR.LISTING_NOT_FOUND, missing: [] },
+      })
+      redirect(`/apply/${listingId}?code=${APPLY_ERROR.LISTING_NOT_FOUND}`)
+    }
+
     const listingIdForSubmit = listing.id
 
     const file = formData.get('resume') as File | null
+    const hasUploadedFile = Boolean(file && file.size > 0 && file.name)
 
-    if (!listingIdForSubmit || !file) {
-      redirect(`/apply/${listingId}?error=Missing+resume`)
+    const { data: profile } = await supabaseAction
+      .from('student_profiles')
+      .select('school, majors, coursework, availability_start_month, availability_hours_per_week')
+      .eq('user_id', currentUser.id)
+      .maybeSingle()
+
+    const completeness = getMinimumProfileCompleteness(profile)
+    if (!completeness.ok) {
+      await trackAnalyticsEvent({
+        eventName: 'apply_recovery_started',
+        userId: currentUser.id,
+        properties: { listing_id: listingId, code: APPLY_ERROR.PROFILE_INCOMPLETE, missing: completeness.missing },
+      })
+      await trackAnalyticsEvent({
+        eventName: 'apply_blocked',
+        userId: currentUser.id,
+        properties: { listing_id: listingId, code: APPLY_ERROR.PROFILE_INCOMPLETE, missing: completeness.missing },
+      })
+      redirect(
+        buildAccountRecoveryHref({
+          returnTo: `/apply/${listingId}`,
+          code: APPLY_ERROR.PROFILE_INCOMPLETE,
+        })
+      )
     }
 
-    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-    if (!isPdf) {
-      redirect(`/apply/${listingId}?error=Resume+must+be+a+PDF`)
-    }
-
-    const supabaseAction = await supabaseServer()
     const { data: existing } = await supabaseAction
       .from('applications')
       .select('id')
@@ -75,30 +197,105 @@ export default async function ApplyPage({
       .maybeSingle()
 
     if (existing?.id) {
-      redirect(`/apply/${listingId}?error=You+already+applied+to+this+internship`)
+      await trackAnalyticsEvent({
+        eventName: 'apply_blocked',
+        userId: currentUser.id,
+        properties: { listing_id: listingId, code: APPLY_ERROR.DUPLICATE_APPLICATION, missing: [] },
+      })
+      redirect(`/apply/${listingId}?code=${APPLY_ERROR.DUPLICATE_APPLICATION}`)
     }
 
-    const resumeId = crypto.randomUUID()
-    const path = `resumes/${currentUser.id}/${listingIdForSubmit}/${resumeId}.pdf`
-    const { error: uploadError } = await supabaseAction.storage
-      .from('resumes')
-      .upload(path, file, { contentType: 'application/pdf', upsert: false })
+    let path = ''
+    if (hasUploadedFile && file) {
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+      if (!isPdf) {
+        await trackAnalyticsEvent({
+          eventName: 'apply_blocked',
+          userId: currentUser.id,
+          properties: { listing_id: listingId, code: APPLY_ERROR.INVALID_RESUME_FILE, missing: [] },
+        })
+        redirect(`/apply/${listingId}?code=${APPLY_ERROR.INVALID_RESUME_FILE}`)
+      }
 
-    if (uploadError) {
-      redirect(`/apply/${listingId}?error=${encodeURIComponent(uploadError.message)}`)
+      const resumeId = crypto.randomUUID()
+      path = `resumes/${currentUser.id}/${listingIdForSubmit}/${resumeId}.pdf`
+      const { error: uploadError } = await supabaseAction.storage
+        .from('resumes')
+        .upload(path, file, { contentType: 'application/pdf', upsert: false })
+
+      if (uploadError) {
+        await trackAnalyticsEvent({
+          eventName: 'apply_blocked',
+          userId: currentUser.id,
+          properties: { listing_id: listingId, code: APPLY_ERROR.APPLICATION_INSERT_FAILED, missing: [] },
+        })
+        redirect(`/apply/${listingId}?code=${APPLY_ERROR.APPLICATION_INSERT_FAILED}`)
+      }
+    } else {
+      const profileResumePath =
+        typeof currentUser.user_metadata?.resume_path === 'string'
+          ? currentUser.user_metadata.resume_path.trim()
+          : ''
+
+      if (!profileResumePath) {
+        await trackAnalyticsEvent({
+          eventName: 'apply_recovery_started',
+          userId: currentUser.id,
+          properties: { listing_id: listingId, code: APPLY_ERROR.RESUME_REQUIRED, missing: [] },
+        })
+        await trackAnalyticsEvent({
+          eventName: 'apply_blocked',
+          userId: currentUser.id,
+          properties: { listing_id: listingId, code: APPLY_ERROR.RESUME_REQUIRED, missing: [] },
+        })
+        redirect(
+          buildAccountRecoveryHref({
+            returnTo: `/apply/${listingId}`,
+            code: APPLY_ERROR.RESUME_REQUIRED,
+          })
+        )
+      }
+      path = profileResumePath
     }
+
+    const snapshot = buildApplicationMatchSnapshot({
+      internship: listing,
+      profile,
+    })
 
     const { error: insertError } = await supabaseAction.from('applications').insert({
       internship_id: listingIdForSubmit,
       student_id: currentUser.id,
       resume_url: path,
       status: 'submitted',
+      match_score: snapshot.match_score,
+      match_reasons: snapshot.match_reasons,
+      match_gaps: snapshot.match_gaps,
+      matching_version: snapshot.matching_version,
     })
 
     if (insertError) {
-      redirect(`/apply/${listingId}?error=${encodeURIComponent(insertError.message)}`)
+      if (isDuplicateApplicationConstraintError(insertError)) {
+        await trackAnalyticsEvent({
+          eventName: 'apply_blocked',
+          userId: currentUser.id,
+          properties: { listing_id: listingId, code: APPLY_ERROR.DUPLICATE_APPLICATION, missing: [] },
+        })
+        redirect(`/apply/${listingId}?code=${APPLY_ERROR.DUPLICATE_APPLICATION}`)
+      }
+      await trackAnalyticsEvent({
+        eventName: 'apply_blocked',
+        userId: currentUser.id,
+        properties: { listing_id: listingId, code: APPLY_ERROR.APPLICATION_INSERT_FAILED, missing: [] },
+      })
+      redirect(`/apply/${listingId}?code=${APPLY_ERROR.APPLICATION_INSERT_FAILED}`)
     }
 
+    await trackAnalyticsEvent({
+      eventName: 'submit_apply_success',
+      userId: currentUser.id,
+      properties: { listing_id: listingIdForSubmit, source: 'applyPage' },
+    })
     redirect('/applications')
   }
 
@@ -110,9 +307,17 @@ export default async function ApplyPage({
         </Link>
 
         <h1 className="mt-4 text-2xl font-semibold text-slate-900">Apply</h1>
-        <p className="mt-2 text-slate-600">Submit your resume for this internship.</p>
+        <p className="mt-2 text-slate-600">
+          Submit your resume for this internship. If you already uploaded one on your profile, you can apply without uploading again.
+        </p>
 
         <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          {searchParams?.recovery === '1' && (
+            <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              Profile updated. Continue and submit your application.
+            </div>
+          )}
+
           <div className="space-y-1">
             <div className="text-lg font-semibold text-slate-900">{listing.title}</div>
             <div className="text-sm text-slate-600">
@@ -132,11 +337,30 @@ export default async function ApplyPage({
             <p className="mt-4 text-sm text-slate-600">{listing.description}</p>
           )}
 
-          {searchParams?.error && (
-            <p className="mt-4 text-sm text-red-600">{decodeURIComponent(searchParams.error)}</p>
-          )}
+          {(() => {
+            const displayError = getApplyErrorDisplay(searchParams)
+            if (!displayError) return null
 
-          <ApplyForm listingId={listing.id} action={submitApplication} />
+            return (
+              <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3">
+                <p className="text-sm text-red-700">{displayError.message}</p>
+                {displayError.missing.length > 0 && (
+                  <ul className="mt-2 list-disc pl-5 text-sm text-red-700">
+                    {displayError.missing.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )
+          })()}
+
+          <ApplyForm
+            listingId={listing.id}
+            action={submitApplication}
+            hasSavedResume={Boolean(savedResumePath)}
+            savedResumeFileName={savedResumeFileName}
+          />
         </div>
       </div>
     </main>

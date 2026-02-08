@@ -1,6 +1,6 @@
 import Link from 'next/link'
-import { calculateMatchScore, parseMajors } from '@/lib/jobs/matching'
-import { fetchInternships, formatMajors, getInternshipType, type Internship } from '@/lib/jobs/internships'
+import { parseMajors, rankInternships } from '@/lib/matching'
+import { fetchInternships, formatMajors, getInternshipType } from '@/lib/jobs/internships'
 import { supabaseServer } from '@/lib/supabase/server'
 import FiltersPanel from '@/app/jobs/_components/FiltersPanel'
 import JobCard from '@/app/jobs/_components/JobCard'
@@ -28,12 +28,6 @@ export type JobsQuery = {
   hours?: string
 }
 
-type MatchContext = {
-  profileMajors: string[]
-  profileAvailability: number | null
-  profileCoursework: string[]
-}
-
 type JobsViewProps = {
   searchParams?: Promise<JobsQuery> | JobsQuery
   showHero?: boolean
@@ -41,41 +35,64 @@ type JobsViewProps = {
   anchorId?: string
 }
 
-function getMatchSignals(listing: Internship, context: MatchContext) {
-  const signals: string[] = []
-  const listingMajors = parseMajors(listing.majors)
-  const majorHit = listingMajors.find((major) => context.profileMajors.includes(major))
-
-  if (majorHit) {
-    signals.push(`Major fit (${majorHit})`)
-  }
-
-  if (
-    typeof listing.hours_per_week === 'number' &&
-    typeof context.profileAvailability === 'number' &&
-    Math.abs(listing.hours_per_week - context.profileAvailability) <= 5
-  ) {
-    signals.push('Availability aligns')
-  }
-
-  if (context.profileCoursework.length > 0) {
-    const title = listing.title?.toLowerCase() ?? ''
-    const courseworkHit = context.profileCoursework.find((course) => {
-      const token = course.toLowerCase().split(' ').find((value) => value.length > 2) ?? ''
-      return token.length > 2 && title.includes(token)
-    })
-
-    if (courseworkHit) {
-      signals.push(`Coursework (${courseworkHit})`)
-    }
-  }
-
-  return signals.slice(0, 2)
+function seasonFromMonth(value: string | null | undefined) {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (normalized.startsWith('jun') || normalized.startsWith('jul') || normalized.startsWith('aug')) return 'summer'
+  if (normalized.startsWith('sep') || normalized.startsWith('oct') || normalized.startsWith('nov')) return 'fall'
+  if (normalized.startsWith('dec') || normalized.startsWith('jan') || normalized.startsWith('feb')) return 'winter'
+  if (normalized.startsWith('mar') || normalized.startsWith('apr') || normalized.startsWith('may')) return 'spring'
+  return ''
 }
 
 function buildBrowseHref(basePath: string, anchorId?: string) {
   const hash = anchorId ? `#${anchorId}` : ''
   return `${basePath}${hash}`
+}
+
+function getStudentProfileCompletion(profile: {
+  university_id?: string | number | null
+  school?: string | null
+  majors?: string[] | string | null
+  year?: string | null
+  coursework?: string[] | string | null
+  experience_level?: string | null
+  availability_start_month?: string | null
+  availability_hours_per_week?: number | string | null
+} | null) {
+  if (!profile) return { completed: 0, total: 7, percent: 0, isComplete: false }
+
+  const majors = parseMajors(profile.majors ?? null)
+  const coursework =
+    Array.isArray(profile.coursework)
+      ? profile.coursework.filter((course): course is string => typeof course === 'string' && course.trim().length > 0)
+      : typeof profile.coursework === 'string'
+        ? profile.coursework
+            .split(',')
+            .map((course) => course.trim())
+            .filter(Boolean)
+        : []
+
+  const hasUniversity = Boolean(
+    profile.university_id || (typeof profile.school === 'string' && profile.school.trim().length > 0)
+  )
+  const hasYear = typeof profile.year === 'string' && profile.year.trim().length > 0 && profile.year !== 'Not set'
+  const hasExperience =
+    profile.experience_level === 'none' ||
+    profile.experience_level === 'projects' ||
+    profile.experience_level === 'internship'
+  const hasStartMonth =
+    typeof profile.availability_start_month === 'string' && profile.availability_start_month.trim().length > 0
+  const hasHours =
+    typeof profile.availability_hours_per_week === 'number'
+      ? profile.availability_hours_per_week > 0
+      : typeof profile.availability_hours_per_week === 'string' && profile.availability_hours_per_week.trim().length > 0
+
+  const checks = [hasUniversity, majors.length > 0, hasYear, hasExperience, hasStartMonth, hasHours, coursework.length > 0]
+  const completed = checks.filter(Boolean).length
+  const total = checks.length
+  const percent = Math.round((completed / total) * 100)
+
+  return { completed, total, percent, isComplete: completed === total }
 }
 
 export function JobsViewSkeleton({ showHero = false }: { showHero?: boolean }) {
@@ -145,13 +162,33 @@ export default async function JobsView({
   let profileMajors: string[] = []
   let profileAvailability: number | null = null
   let profileCoursework: string[] = []
+  let profileSkillIds: string[] = []
+  const matchReasonsById = new Map<string, string[]>()
+  let role: 'student' | 'employer' | undefined
+  let showCompleteProfileBanner = false
+  let profileCompletionPercent = 0
 
   if (user) {
+    const { data: userRow } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', user.id)
+      .maybeSingle()
+    if (userRow?.role === 'student' || userRow?.role === 'employer') {
+      role = userRow.role
+    }
+
     const { data: profile } = await supabase
       .from('student_profiles')
-      .select('majors, availability_hours_per_week, coursework')
+      .select(
+        'university_id, school, majors, year, coursework, experience_level, availability_start_month, availability_hours_per_week'
+      )
       .eq('user_id', user.id)
       .maybeSingle()
+    const { data: studentSkillRows } = await supabase
+      .from('student_skill_items')
+      .select('skill_id')
+      .eq('student_id', user.id)
 
     profileMajors = parseMajors(profile?.majors ?? null)
     profileAvailability = profile?.availability_hours_per_week ?? null
@@ -160,24 +197,49 @@ export default async function JobsView({
           (course): course is string => typeof course === 'string' && course.length > 0
         )
       : []
+    profileSkillIds = (studentSkillRows ?? [])
+      .map((row) => row.skill_id)
+      .filter((value): value is string => typeof value === 'string')
 
-    if (profileMajors.length > 0 || typeof profileAvailability === 'number') {
+    if (role === 'student') {
+      const completion = getStudentProfileCompletion(profile ?? null)
+      profileCompletionPercent = completion.percent
+      showCompleteProfileBanner = !completion.isComplete
+    }
+
+    if (
+      role === 'student' &&
+      (profileMajors.length > 0 || typeof profileAvailability === 'number' || profileCoursework.length > 0 || profileSkillIds.length > 0)
+    ) {
       isBestMatch = true
-      sortedInternships = [...sortedInternships]
-        .map((listing) => ({
-          ...listing,
-          matchScore: calculateMatchScore(
-            {
-              majors: listing.majors,
-              hoursPerWeek: listing.hours_per_week,
-              createdAt: listing.created_at,
-            },
-            {
-              majors: profileMajors,
-              availabilityHoursPerWeek: profileAvailability,
-            }
-          ),
-        }))
+      const ranked = rankInternships(
+        internships.map((listing) => ({
+          id: listing.id,
+          title: listing.title,
+          description: listing.description,
+          majors: listing.majors,
+          hours_per_week: listing.hours_per_week,
+          location: listing.location,
+          required_skill_ids: listing.required_skill_ids,
+          preferred_skill_ids: listing.preferred_skill_ids,
+        })),
+        {
+          majors: profileMajors,
+          skill_ids: profileSkillIds,
+          coursework: profileCoursework,
+          availability_hours_per_week: profileAvailability,
+          preferred_terms: profile?.availability_start_month ? [seasonFromMonth(profile.availability_start_month)] : [],
+        }
+      )
+
+      for (const item of ranked) {
+        matchReasonsById.set(item.internship.id, item.match.reasons.slice(0, 2))
+      }
+
+      const scoreById = new Map(ranked.map((item) => [item.internship.id, item.match.score]))
+      sortedInternships = internships
+        .filter((listing) => scoreById.has(listing.id))
+        .map((listing) => ({ ...listing, matchScore: scoreById.get(listing.id) ?? 0 }))
         .sort((a, b) => {
           if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore
           return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
@@ -240,6 +302,22 @@ export default async function JobsView({
       ) : null}
 
       <section id={anchorId} className="mx-auto max-w-6xl scroll-mt-24 px-6 py-8">
+        {showCompleteProfileBanner && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p>
+                Profile {profileCompletionPercent}% complete. Finish your profile to improve internship matches.
+              </p>
+              <Link
+                href="/account?complete=1"
+                className="inline-flex items-center justify-center rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100"
+              >
+                Complete profile
+              </Link>
+            </div>
+          </div>
+        )}
+
         <div className="flex items-end justify-between gap-4">
           <div>
             <h2 className="text-2xl font-semibold text-slate-900">{listingsTitle}</h2>
@@ -315,15 +393,8 @@ export default async function JobsView({
                             jobType: getInternshipType(listing.hours_per_week),
                           }}
                           isAuthenticated={Boolean(user)}
-                          matchSignals={
-                            user
-                              ? getMatchSignals(listing, {
-                                  profileMajors,
-                                  profileAvailability,
-                                  profileCoursework,
-                                })
-                              : []
-                          }
+                          userRole={role ?? null}
+                          matchSignals={role === 'student' ? matchReasonsById.get(listing.id) ?? [] : []}
                         />
                       ))}
                     </div>
@@ -331,26 +402,30 @@ export default async function JobsView({
                 ) : (
                   <section className="rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
                     <h3 className="text-lg font-semibold text-slate-900">No internships yet</h3>
-                    <p className="mt-2 text-sm text-slate-600">Check back soon or create an account to get updates.</p>
-                    <div className="mt-4">
-                      <Link
-                        href="/signup/student"
-                        className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                      >
-                        Create account
-                      </Link>
-                    </div>
+                    <p className="mt-2 text-sm text-slate-600">
+                      {user
+                        ? 'Check back soon for new opportunities.'
+                        : 'Check back soon or create an account to get updates.'}
+                    </p>
+                    {!user && (
+                      <div className="mt-4">
+                        <Link
+                          href="/signup/student"
+                          className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                        >
+                          Create account
+                        </Link>
+                      </div>
+                    )}
                   </section>
                 )}
               </div>
             ) : (
               filteredInternships.map((listing) => {
                 const matchSignals = user
-                  ? getMatchSignals(listing, {
-                      profileMajors,
-                      profileAvailability,
-                      profileCoursework,
-                    })
+                  ? role === 'student'
+                    ? matchReasonsById.get(listing.id) ?? []
+                    : []
                   : []
 
                 return (
@@ -362,6 +437,7 @@ export default async function JobsView({
                       jobType: getInternshipType(listing.hours_per_week),
                     }}
                     isAuthenticated={Boolean(user)}
+                    userRole={role ?? null}
                     matchSignals={matchSignals}
                   />
                 )

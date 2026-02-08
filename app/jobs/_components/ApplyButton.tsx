@@ -3,10 +3,14 @@
 import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabaseBrowser } from '@/lib/supabase/client'
+import { APPLY_ERROR } from '@/lib/applyErrors'
+import { buildAccountRecoveryHref } from '@/lib/applyRecovery'
+import { applyFromMicroOnboardingAction } from './applyActions'
 
 type Props = {
   listingId: string
   isAuthenticated: boolean
+  userRole?: 'student' | 'employer' | null
   className?: string
 }
 
@@ -23,7 +27,7 @@ function parseAuthError(message: string) {
   return message
 }
 
-export default function ApplyButton({ listingId, isAuthenticated, className }: Props) {
+export default function ApplyButton({ listingId, isAuthenticated, userRole = null, className }: Props) {
   const [open, setOpen] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -41,6 +45,22 @@ export default function ApplyButton({ listingId, isAuthenticated, className }: P
       'inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700',
     [className]
   )
+
+  async function trackApplyClick() {
+    try {
+      await fetch('/api/analytics/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_name: 'click_apply',
+          properties: { listing_id: listingId, is_authenticated: isAuthenticated, user_role: userRole ?? null },
+        }),
+        keepalive: true,
+      })
+    } catch {
+      // no-op
+    }
+  }
 
   async function submitMicroOnboarding() {
     setError(null)
@@ -136,38 +156,47 @@ export default function ApplyButton({ listingId, isAuthenticated, className }: P
       return setError(profileError.message)
     }
 
-    const { data: existingApplication, error: existingApplicationError } = await supabase
-      .from('applications')
-      .select('id')
-      .eq('student_id', user.id)
-      .eq('internship_id', listingId)
-      .maybeSingle()
-
-    if (existingApplicationError) {
+    const applicationResult = await applyFromMicroOnboardingAction({ listingId })
+    if (!applicationResult.ok) {
       setLoading(false)
-      return setError(existingApplicationError.message)
-    }
 
-    if (!existingApplication?.id) {
-      const { error: applicationError } = await supabase.from('applications').insert({
-        internship_id: listingId,
-        student_id: user.id,
-        status: 'submitted',
-      })
-
-      if (applicationError) {
-        const message = applicationError.message.toLowerCase()
-        if (message.includes('resume') || message.includes('null value')) {
-          setOpen(false)
-          setLoading(false)
-          router.push(`/apply/${listingId}`)
-          router.refresh()
-          return
-        }
-
-        setLoading(false)
-        return setError(applicationError.message)
+      if (applicationResult.code === APPLY_ERROR.RESUME_REQUIRED) {
+        setOpen(false)
+        router.push(
+          buildAccountRecoveryHref({
+            returnTo: `/apply/${listingId}`,
+            code: APPLY_ERROR.RESUME_REQUIRED,
+          })
+        )
+        router.refresh()
+        return
       }
+
+      if (applicationResult.code === APPLY_ERROR.PROFILE_INCOMPLETE) {
+        setOpen(false)
+        router.push(
+          buildAccountRecoveryHref({
+            returnTo: `/apply/${listingId}`,
+            code: APPLY_ERROR.PROFILE_INCOMPLETE,
+          })
+        )
+        router.refresh()
+        return
+      }
+
+      if (applicationResult.code === APPLY_ERROR.ROLE_NOT_STUDENT) {
+        return setError('This account is not a student account. Use a student account to apply.')
+      }
+
+      if (applicationResult.code === APPLY_ERROR.DUPLICATE_APPLICATION) {
+        return setError('You already applied to this internship.')
+      }
+
+      if (applicationResult.code === APPLY_ERROR.AUTH_REQUIRED) {
+        return setError('Please sign in to continue.')
+      }
+
+      return setError('Could not submit application right now. Please try again.')
     }
 
     setOpen(false)
@@ -176,17 +205,57 @@ export default function ApplyButton({ listingId, isAuthenticated, className }: P
     router.refresh()
   }
 
+  if (userRole === 'employer') {
+    return (
+      <button
+        type="button"
+        disabled
+        title="Employer accounts cannot apply. Switch to a student account to apply."
+        className={`${buttonClassName} cursor-not-allowed opacity-60`}
+      >
+        Switch to student account to apply
+      </button>
+    )
+  }
+
+  if (isAuthenticated && userRole === 'student') {
+    return (
+      <a
+        href={`/apply/${listingId}`}
+        className={buttonClassName}
+        onClick={() => {
+          void trackApplyClick()
+        }}
+      >
+        Apply
+      </a>
+    )
+  }
+
   if (isAuthenticated) {
     return (
-      <a href={`/apply/${listingId}`} className={buttonClassName}>
-        Apply
+      <a
+        href="/account"
+        className={buttonClassName}
+        onClick={() => {
+          void trackApplyClick()
+        }}
+      >
+        Choose account type to apply
       </a>
     )
   }
 
   return (
     <>
-      <button type="button" className={buttonClassName} onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className={buttonClassName}
+        onClick={() => {
+          void trackApplyClick()
+          setOpen(true)
+        }}
+      >
         Apply
       </button>
 

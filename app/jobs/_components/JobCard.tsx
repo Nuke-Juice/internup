@@ -6,6 +6,12 @@ type Listing = {
   title: string | null
   company_name: string | null
   location: string | null
+  role_category?: string | null
+  work_mode?: string | null
+  term?: string | null
+  hours_min?: number | null
+  hours_max?: number | null
+  application_deadline?: string | null
   experience_level: string | null
   hours_per_week: number | null
   majorsText: string | null
@@ -16,6 +22,7 @@ type Listing = {
 type Props = {
   listing: Listing
   isAuthenticated: boolean
+  userRole?: 'student' | 'employer' | null
   matchSignals: string[]
 }
 
@@ -26,7 +33,7 @@ function badgeClass(primary = false) {
   return 'rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700'
 }
 
-export default function JobCard({ listing, isAuthenticated, matchSignals }: Props) {
+export default function JobCard({ listing, isAuthenticated, userRole = null, matchSignals }: Props) {
   return (
     <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-start justify-between gap-3">
@@ -39,9 +46,27 @@ export default function JobCard({ listing, isAuthenticated, matchSignals }: Prop
 
       <div className="mt-3 flex flex-wrap gap-2">
         <span className={badgeClass()}>{listing.location || 'Location TBD'}</span>
+        {listing.work_mode ? <span className={badgeClass()}>{listing.work_mode}</span> : null}
+        {listing.term ? <span className={badgeClass()}>{listing.term}</span> : null}
         <span className={badgeClass()}>{listing.jobType === 'part-time' ? 'Part-time' : 'Internship'}</span>
         {listing.experience_level ? <span className={badgeClass()}>{listing.experience_level}</span> : null}
       </div>
+
+      {(typeof listing.hours_min === 'number' || typeof listing.hours_max === 'number') && (
+        <p className="mt-2 text-xs text-slate-600">
+          <span className="text-slate-500">Hours:</span> {listing.hours_min ?? '—'}-{listing.hours_max ?? '—'} / week
+        </p>
+      )}
+      {listing.application_deadline ? (
+        <p className="mt-1 text-xs text-slate-600">
+          <span className="text-slate-500">Apply by:</span> {listing.application_deadline}
+        </p>
+      ) : null}
+      {listing.role_category ? (
+        <p className="mt-1 text-xs text-slate-600">
+          <span className="text-slate-500">Role category:</span> {listing.role_category}
+        </p>
+      ) : null}
 
       {listing.majorsText ? (
         <p className="mt-3 line-clamp-1 text-sm text-slate-600">
@@ -65,6 +90,7 @@ export default function JobCard({ listing, isAuthenticated, matchSignals }: Prop
         <ApplyButton
           listingId={listing.id}
           isAuthenticated={isAuthenticated}
+          userRole={userRole}
           className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
         />
       </div>

@@ -6,6 +6,7 @@ type University = {
 }
 
 type Props = {
+  inputId?: string
   query: string
   onQueryChange: (value: string) => void
   options: University[]
@@ -16,6 +17,7 @@ type Props = {
 }
 
 export default function UniversityCombobox({
+  inputId,
   query,
   onQueryChange,
   options,
@@ -30,6 +32,7 @@ export default function UniversityCombobox({
     <div className="relative">
       <label className="text-sm font-medium text-slate-700">University</label>
       <input
+        id={inputId}
         className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
         value={query}
         onChange={(e) => onQueryChange(e.target.value)}

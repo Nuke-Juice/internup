@@ -2,8 +2,8 @@ import Link from 'next/link'
 import { requireRole } from '@/lib/auth/requireRole'
 import { supabaseServer } from '@/lib/supabase/server'
 
-const steps = ['submitted', 'viewed', 'interview', 'accepted'] as const
-type Status = (typeof steps)[number] | 'rejected'
+const steps = ['submitted', 'reviewing', 'interview', 'accepted'] as const
+type Status = (typeof steps)[number] | 'rejected' | 'viewed'
 
 function ProgressBar({ status }: { status: Status }) {
   if (status === 'rejected') {
@@ -14,7 +14,8 @@ function ProgressBar({ status }: { status: Status }) {
     )
   }
 
-  const idx = steps.indexOf(status)
+  const normalizedStatus = status === 'viewed' ? 'reviewing' : status
+  const idx = steps.indexOf(normalizedStatus as (typeof steps)[number])
   const pct = idx >= 0 ? ((idx + 1) / steps.length) * 100 : 25
 
   return (
@@ -27,6 +28,7 @@ function ProgressBar({ status }: { status: Status }) {
 function StatusPill({ status }: { status: Status }) {
   const map: Record<string, string> = {
     submitted: 'bg-slate-50 text-slate-700 border-slate-200',
+    reviewing: 'bg-blue-50 text-blue-700 border-blue-200',
     viewed: 'bg-blue-50 text-blue-700 border-blue-200',
     interview: 'bg-blue-50 text-blue-700 border-blue-200',
     accepted: 'bg-blue-50 text-blue-700 border-blue-200',
@@ -48,13 +50,20 @@ function formatDate(value: string | null) {
   }
 }
 
+function parseReasons(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .slice(0, 2)
+}
+
 export default async function ApplicationsPage() {
   const { user } = await requireRole('student')
   const supabase = await supabaseServer()
 
   const { data: applications } = await supabase
     .from('applications')
-    .select('id, status, created_at, internship:internships(id, title, company_name)')
+    .select('id, status, created_at, match_score, match_reasons, internship:internships(id, title, company_name)')
     .eq('student_id', user.id)
     .order('created_at', { ascending: false })
 
@@ -83,6 +92,7 @@ export default async function ApplicationsPage() {
             {applications.map((a) => {
               const listing = a.internship as { title?: string | null; company_name?: string | null } | null
               const status = (a.status ?? 'submitted') as Status
+              const topReasons = parseReasons(a.match_reasons)
               return (
                 <div key={a.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                   <div className="flex items-start justify-between gap-4">
@@ -107,6 +117,18 @@ export default async function ApplicationsPage() {
                   <div className="mt-2 text-xs text-slate-500">
                     Submitted {'->'} Viewed {'->'} Interview {'->'} Accepted (or Rejected)
                   </div>
+
+                  <div className="mt-3 text-xs text-slate-600">
+                    <span className="font-medium text-slate-700">Match score:</span>{' '}
+                    {typeof a.match_score === 'number' ? a.match_score : 'N/A'}
+                  </div>
+                  {topReasons.length > 0 ? (
+                    <ul className="mt-2 list-disc pl-5 text-xs text-slate-600">
+                      {topReasons.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </div>
               )
             })}

@@ -1,8 +1,19 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import UniversityCombobox from '@/components/account/UniversityCombobox'
+import {
+  addRecoverySuccessParam,
+  clearStoredReturnTo,
+  getStoredReturnTo,
+  normalizeReturnTo,
+  setStoredReturnTo,
+} from '@/lib/applyRecovery'
+import { getMinimumProfileCompleteness } from '@/lib/profileCompleteness'
 import { supabaseBrowser } from '@/lib/supabase/client'
+import { normalizeSkillsClient } from '@/lib/skills/normalizeSkillsClient'
 
 type StudentProfileRow = {
   university_id: string | number | null
@@ -69,6 +80,9 @@ const months = [
   'December',
 ]
 const hoursPerWeekOptions = [5, 10, 15, 20, 25, 30, 35, 40]
+const maxProfilePhotoBytes = 2 * 1024 * 1024
+const maxResumeBytes = 5 * 1024 * 1024
+const profilePhotoBuckets = ['avatars', 'profile-photos']
 
 function normalizeExperienceLevel(value: string | null | undefined): ExperienceLevel {
   const normalized = String(value ?? '')
@@ -85,9 +99,9 @@ function normalizeExperienceLevel(value: string | null | undefined): ExperienceL
 }
 
 function getExperienceLabel(value: ExperienceLevel) {
-  if (value === 'projects') return "I've taken classes / built projects related to it"
-  if (value === 'internship') return "I've had an internship or role in the field"
-  return "I'm new to this (no relevant experience yet)"
+  if (value === 'projects') return "I've done projects"
+  if (value === 'internship') return "I've had an internship"
+  return "I'm new to this"
 }
 
 function getPrimaryMajor(value: StudentProfileRow['majors']) {
@@ -130,7 +144,12 @@ function defaultSeasonFromMonth(value: string | null) {
 
 function parsePreferences(value: unknown) {
   if (!value || typeof value !== 'object') return null
-  const maybeObject = value as { remoteOk?: unknown; seasons?: unknown; availability?: unknown }
+  const maybeObject = value as {
+    remoteOk?: unknown
+    seasons?: unknown
+    availability?: unknown
+    profileHeadline?: unknown
+  }
 
   const rawSeasons = Array.isArray(maybeObject.seasons)
     ? maybeObject.seasons
@@ -140,10 +159,17 @@ function parsePreferences(value: unknown) {
   const parsedSeasons = rawSeasons.filter(
     (item): item is string => typeof item === 'string' && seasons.includes(item as (typeof seasons)[number])
   )
+  const parsedSkills = Array.isArray((maybeObject as { skills?: unknown }).skills)
+    ? (maybeObject as { skills: unknown[] }).skills.filter(
+        (item): item is string => typeof item === 'string' && item.trim().length > 0
+      )
+    : []
 
   return {
     remoteOk: Boolean(maybeObject.remoteOk),
     seasons: parsedSeasons,
+    profileHeadline: typeof maybeObject.profileHeadline === 'string' ? maybeObject.profileHeadline : '',
+    skills: parsedSkills,
   }
 }
 
@@ -161,23 +187,53 @@ function normalizeCourseworkName(value: string) {
   return value.trim().replace(/\s+/g, ' ')
 }
 
+function normalizeSkillName(value: string) {
+  return value.trim().replace(/\s+/g, ' ')
+}
+
+function initialsForName(firstName: string, lastName: string) {
+  const first = firstName.trim().slice(0, 1)
+  const last = lastName.trim().slice(0, 1)
+  if (first || last) return `${first}${last}`.toUpperCase()
+  return 'S'
+}
+
 function includesCoursework(list: string[], value: string) {
   const normalized = normalizeCourseworkName(value).toLowerCase()
   return list.some((item) => normalizeCourseworkName(item).toLowerCase() === normalized)
 }
 
+function includesSkill(list: string[], value: string) {
+  const normalized = normalizeSkillName(value).toLowerCase()
+  return list.some((item) => normalizeSkillName(item).toLowerCase() === normalized)
+}
+
 export default function StudentAccount({ userId, initialProfile }: Props) {
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const [selectedUniversity, setSelectedUniversity] = useState<University | null>(null)
   const [universityQuery, setUniversityQuery] = useState(initialProfile?.school ?? '')
   const [universityOptions, setUniversityOptions] = useState<University[]>([])
   const [universityLoading, setUniversityLoading] = useState(false)
   const [universityError, setUniversityError] = useState<string | null>(null)
   const [universitySearchError, setUniversitySearchError] = useState<string | null>(null)
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
+  const [email, setEmail] = useState('')
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState('')
+  const [profilePhotoPreviewUrl, setProfilePhotoPreviewUrl] = useState<string | null>(null)
+  const [profilePhotoFile, setProfilePhotoFile] = useState<File | null>(null)
+  const [resumeStoragePath, setResumeStoragePath] = useState('')
+  const [resumeFileName, setResumeFileName] = useState('')
+  const [resumeFile, setResumeFile] = useState<File | null>(null)
+  const [profileHeadline, setProfileHeadline] = useState('')
 
   const [major, setMajor] = useState(getPrimaryMajor(initialProfile?.majors ?? null) || 'Finance')
   const [graduationYear, setGraduationYear] = useState(initialProfile?.year ?? '2028')
   const [coursework, setCoursework] = useState<string[]>(getCourseworkText(initialProfile?.coursework ?? null))
   const [courseworkInput, setCourseworkInput] = useState('')
+  const [skills, setSkills] = useState<string[]>([])
+  const [skillInput, setSkillInput] = useState('')
   const [experienceLevel, setExperienceLevel] = useState<ExperienceLevel>(
     normalizeExperienceLevel(initialProfile?.experience_level)
   )
@@ -195,9 +251,11 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
   const [suggestionsLoading, setSuggestionsLoading] = useState(false)
 
   const [saving, setSaving] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
+  const [successToast, setSuccessToast] = useState<{ id: number; message: string } | null>(null)
+  const [successToastVisible, setSuccessToastVisible] = useState(false)
 
   const hasSavedProfile = useMemo(() => {
     return Boolean(
@@ -205,12 +263,84 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
         major.trim() ||
         graduationYear.trim() ||
         coursework.length > 0 ||
+        skills.length > 0 ||
         availabilityStartMonth.trim() ||
         availabilityHoursPerWeek
     )
-  }, [availabilityHoursPerWeek, availabilityStartMonth, coursework, graduationYear, major, universityQuery])
+  }, [availabilityHoursPerWeek, availabilityStartMonth, coursework, graduationYear, major, skills, universityQuery])
 
   const [mode, setMode] = useState<'view' | 'edit'>(hasSavedProfile ? 'view' : 'edit')
+  const [pendingFocusId, setPendingFocusId] = useState<string | null>(null)
+  const showIncompleteGuide = searchParams.get('complete') === '1'
+  const recoveryCode = searchParams.get('recoveryCode')
+  const returnTo = useMemo(() => {
+    const fromQuery = normalizeReturnTo(searchParams.get('returnTo'))
+    if (fromQuery) return fromQuery
+    return getStoredReturnTo()
+  }, [searchParams])
+
+  const completionFlags = useMemo(() => {
+    const validExperience =
+      experienceLevel === 'none' || experienceLevel === 'projects' || experienceLevel === 'internship'
+
+    return {
+      identity: Boolean(firstName.trim() && lastName.trim()),
+      university: Boolean(selectedUniversity || universityQuery.trim()),
+      major: Boolean(major.trim()),
+      graduationYear: Boolean(graduationYear.trim() && graduationYear !== 'Not set'),
+      experience: validExperience,
+      startMonth: Boolean(availabilityStartMonth.trim()),
+      hours: Number(availabilityHoursPerWeek) > 0,
+      coursework: coursework.length > 0,
+      seasons: availability.length > 0,
+    }
+  }, [
+    availability,
+    availabilityHoursPerWeek,
+    availabilityStartMonth,
+    coursework.length,
+    experienceLevel,
+    firstName,
+    graduationYear,
+    lastName,
+    major,
+    selectedUniversity,
+    universityQuery,
+  ])
+
+  const missingCount = useMemo(() => {
+    return Object.values(completionFlags).filter((done) => !done).length
+  }, [completionFlags])
+
+  const minimumProfileReady = useMemo(() => {
+    return getMinimumProfileCompleteness({
+      school: selectedUniversity?.name ?? universityQuery ?? null,
+      majors: major ? [major] : [],
+      availability_start_month: availabilityStartMonth,
+      availability_hours_per_week: availabilityHoursPerWeek,
+    }).ok
+  }, [availabilityHoursPerWeek, availabilityStartMonth, major, selectedUniversity?.name, universityQuery])
+
+  const hasResumeForApply = useMemo(() => {
+    return Boolean(resumeStoragePath.trim() || resumeFile)
+  }, [resumeFile, resumeStoragePath])
+
+  const recoveryReady = minimumProfileReady && hasResumeForApply
+
+  const showCardHints = mode === 'view' && showIncompleteGuide && missingCount > 0
+
+  function cardClass(isMissing: boolean) {
+    return `relative rounded-xl border p-4 ${
+      isMissing ? 'border-amber-300 bg-amber-50/40' : 'border-slate-200 bg-slate-50'
+    }`
+  }
+
+  useEffect(() => {
+    const fromQuery = normalizeReturnTo(searchParams.get('returnTo'))
+    if (fromQuery) {
+      setStoredReturnTo(fromQuery)
+    }
+  }, [searchParams])
 
   useEffect(() => {
     const supabase = supabaseBrowser()
@@ -237,10 +367,43 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
           : 'May'
       const parsedPreferences =
         parsePreferences(row.preferences) ?? parseLegacyInterests((row.interests as string) ?? null)
+      const { data: canonicalSkillRows } = await supabase
+        .from('student_skill_items')
+        .select('skill_id, skill:skills(label)')
+        .eq('student_id', userId)
+      const { data: authData } = await supabase.auth.getUser()
+      const authUser = authData.user
+      const authMetadata = (authUser?.user_metadata ?? {}) as {
+        first_name?: string
+        last_name?: string
+        full_name?: string
+        avatar_url?: string
+        resume_path?: string
+        resume_file_name?: string
+      }
+      const nameTokens = (authMetadata.full_name ?? '')
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter(Boolean)
+      const firstNameValue =
+        typeof authMetadata.first_name === 'string' && authMetadata.first_name.trim()
+          ? authMetadata.first_name
+          : nameTokens[0] ?? ''
+      const lastNameValue =
+        typeof authMetadata.last_name === 'string' && authMetadata.last_name.trim()
+          ? authMetadata.last_name
+          : nameTokens.slice(1).join(' ')
 
       setMajor(dbMajor || 'Finance')
       setGraduationYear((row.year as string) ?? '2028')
       setCoursework(dbCoursework)
+      const canonicalSkillLabels = (canonicalSkillRows ?? [])
+        .map((rowItem) => {
+          const skill = rowItem.skill as { label?: string | null } | null
+          return typeof skill?.label === 'string' ? skill.label.trim() : ''
+        })
+        .filter(Boolean)
+      setSkills(canonicalSkillLabels.length > 0 ? canonicalSkillLabels : (parsedPreferences?.skills ?? []))
       setExperienceLevel(normalizeExperienceLevel((row.experience_level as string) ?? null))
       setAvailabilityStartMonth(dbStartMonth)
       setAvailabilityHoursPerWeek(
@@ -252,6 +415,13 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
           : defaultSeasonFromMonth(dbStartMonth)
       )
       setRemoteOk(Boolean(parsedPreferences?.remoteOk))
+      setProfileHeadline(parsedPreferences?.profileHeadline ?? '')
+      setFirstName(firstNameValue)
+      setLastName(lastNameValue)
+      setProfilePhotoUrl(typeof authMetadata.avatar_url === 'string' ? authMetadata.avatar_url : '')
+      setResumeStoragePath(typeof authMetadata.resume_path === 'string' ? authMetadata.resume_path : '')
+      setResumeFileName(typeof authMetadata.resume_file_name === 'string' ? authMetadata.resume_file_name : '')
+      setEmail(authUser?.email ?? '')
 
       const universityId =
         typeof row.university_id === 'string' || typeof row.university_id === 'number'
@@ -305,6 +475,48 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
 
     void loadLatestProfile()
   }, [userId])
+
+  useEffect(() => {
+    return () => {
+      if (profilePhotoPreviewUrl) {
+        URL.revokeObjectURL(profilePhotoPreviewUrl)
+      }
+    }
+  }, [profilePhotoPreviewUrl])
+
+  useEffect(() => {
+    if (!successToast) return
+    const enterTimer = setTimeout(() => {
+      setSuccessToastVisible(true)
+    }, 20)
+    const exitTimer = setTimeout(() => {
+      setSuccessToastVisible(false)
+    }, 5000)
+    const clearTimer = setTimeout(() => {
+      setSuccessToast(null)
+    }, 5300)
+
+    return () => {
+      clearTimeout(enterTimer)
+      clearTimeout(exitTimer)
+      clearTimeout(clearTimer)
+    }
+  }, [successToast])
+
+  useEffect(() => {
+    if (mode !== 'edit' || !pendingFocusId) return
+
+    const timer = setTimeout(() => {
+      const target = document.getElementById(pendingFocusId)
+      if (target instanceof HTMLElement) {
+        target.focus()
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+      setPendingFocusId(null)
+    }, 60)
+
+    return () => clearTimeout(timer)
+  }, [mode, pendingFocusId])
 
   useEffect(() => {
     const query = universityQuery.trim()
@@ -468,6 +680,19 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
     )
   }
 
+  function addSkillItem(value: string) {
+    const normalized = normalizeSkillName(value)
+    if (!normalized || includesSkill(skills, normalized)) return
+    setSkills((prev) => [...prev, normalized])
+    setSkillInput('')
+  }
+
+  function removeSkillItem(value: string) {
+    setSkills((prev) =>
+      prev.filter((item) => normalizeSkillName(item).toLowerCase() !== normalizeSkillName(value).toLowerCase())
+    )
+  }
+
   function toggleAvailability(season: (typeof seasons)[number]) {
     setAvailability((prev) =>
       prev.includes(season) ? prev.filter((item) => item !== season) : [...prev, season]
@@ -476,7 +701,7 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
 
   async function saveProfile() {
     setError(null)
-    setSuccess(null)
+    setSuccessToast(null)
     setUniversityError(null)
 
     if (!selectedUniversity) {
@@ -489,6 +714,10 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
       setError('Select at least one season.')
       return
     }
+    if (!firstName.trim() || !lastName.trim()) {
+      setError('First name and last name are required.')
+      return
+    }
 
     setSaving(true)
     const supabase = supabaseBrowser()
@@ -497,9 +726,79 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
     const normalizedCourseworkList = coursework
       .map((course) => normalizeCourseworkName(course))
       .filter(Boolean)
+    const normalizedSkillsList = skills.map((skill) => normalizeSkillName(skill)).filter(Boolean)
     const normalizedCourseworkText =
       normalizedCourseworkList.length > 0 ? normalizedCourseworkList.join(', ') : ''
+    const { skillIds: normalizedSkillIds, unknown: unknownSkills } = await normalizeSkillsClient(normalizedSkillsList)
     const normalizedMajor = major.trim() || null
+    let avatarUrl = profilePhotoUrl.trim()
+    let resumePath = resumeStoragePath.trim()
+    let resumeName = resumeFileName.trim()
+
+    if (profilePhotoFile) {
+      const uploadPath = `students/${userId}/avatar-${Date.now()}-${profilePhotoFile.name.replace(/[^a-zA-Z0-9._-]/g, '-')}`
+      let uploaded = false
+      let uploadMessage = 'Unable to upload profile photo right now. Please try again.'
+
+      for (const bucket of profilePhotoBuckets) {
+        const { error: uploadError } = await supabase.storage.from(bucket).upload(uploadPath, profilePhotoFile, {
+          contentType: profilePhotoFile.type || 'image/jpeg',
+          upsert: true,
+        })
+
+        if (uploadError) {
+          uploadMessage = uploadError.message
+          continue
+        }
+
+        const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(uploadPath)
+        avatarUrl = urlData.publicUrl
+        uploaded = true
+        break
+      }
+
+      if (!uploaded) {
+        setSaving(false)
+        setError(uploadMessage)
+        return
+      }
+    }
+
+    if (resumeFile) {
+      const sanitizedFileName = resumeFile.name.replace(/[^a-zA-Z0-9._-]/g, '-')
+      const resumePathForStorage = `profiles/${userId}/resume-${Date.now()}-${sanitizedFileName}`
+      const { error: resumeUploadError } = await supabase.storage
+        .from('resumes')
+        .upload(resumePathForStorage, resumeFile, { contentType: 'application/pdf', upsert: true })
+
+      if (resumeUploadError) {
+        setSaving(false)
+        setError(resumeUploadError.message)
+        return
+      }
+
+      resumePath = resumePathForStorage
+      resumeName = resumeFile.name
+    }
+
+    const fullName = `${firstName.trim()} ${lastName.trim()}`.trim()
+
+    const { error: authError } = await supabase.auth.updateUser({
+      data: {
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        full_name: fullName || null,
+        avatar_url: avatarUrl || null,
+        resume_path: resumePath || null,
+        resume_file_name: resumeName || null,
+      },
+    })
+
+    if (authError) {
+      setSaving(false)
+      setError(authError.message)
+      return
+    }
 
     const basePayload = {
       user_id: userId,
@@ -522,7 +821,15 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
 
       const attachPreferences = (payload: Record<string, unknown>) =>
         options.includePreferences
-          ? { ...payload, preferences: { remoteOk, seasons: availability } }
+          ? {
+              ...payload,
+              preferences: {
+                remoteOk,
+                seasons: availability,
+                profileHeadline: profileHeadline.trim() || '',
+                skills: normalizedSkillsList,
+              },
+            }
           : payload
 
       return [
@@ -597,12 +904,112 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
       return
     }
 
-    setSuccess('Preferences saved.')
+    const { error: clearSkillItemsError } = await supabase
+      .from('student_skill_items')
+      .delete()
+      .eq('student_id', userId)
+
+    if (clearSkillItemsError) {
+      setError(clearSkillItemsError.message)
+      return
+    }
+
+    if (normalizedSkillIds.length > 0) {
+      const { error: insertSkillItemsError } = await supabase.from('student_skill_items').insert(
+        normalizedSkillIds.map((skillId) => ({
+          student_id: userId,
+          skill_id: skillId,
+          level: null,
+        }))
+      )
+
+      if (insertSkillItemsError) {
+        setError(insertSkillItemsError.message)
+        return
+      }
+    }
+
+    const recoveryReadyAfterSave =
+      getMinimumProfileCompleteness({
+        school: selectedUniversity.name,
+        majors: normalizedMajor ? [normalizedMajor] : [],
+        availability_start_month: availabilityStartMonth.trim() || null,
+        availability_hours_per_week: Number(availabilityHoursPerWeek),
+      }).ok && Boolean(resumePath || resumeName || resumeFile)
+
+    if (returnTo && recoveryReadyAfterSave) {
+      try {
+        await fetch('/api/analytics/event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            event_name: 'apply_recovery_completed',
+            properties: { return_to: returnTo, recovery_code: recoveryCode ?? null },
+          }),
+          keepalive: true,
+        })
+      } catch {
+        // no-op
+      }
+
+      clearStoredReturnTo()
+      router.push(addRecoverySuccessParam(returnTo))
+      router.refresh()
+      return
+    }
+
+    setSuccessToastVisible(false)
+    setSuccessToast({
+      id: Date.now(),
+      message:
+        unknownSkills.length > 0
+          ? `Preferences saved. Stored fallback text for unrecognized skills: ${unknownSkills.join(', ')}`
+          : 'Preferences saved.',
+    })
+    setProfilePhotoUrl(avatarUrl)
+    setProfilePhotoFile(null)
+    setResumeStoragePath(resumePath)
+    setResumeFileName(resumeName)
+    setResumeFile(null)
+    if (profilePhotoPreviewUrl) {
+      URL.revokeObjectURL(profilePhotoPreviewUrl)
+      setProfilePhotoPreviewUrl(null)
+    }
     setMode('view')
   }
 
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+  async function signOut() {
+    setSigningOut(true)
+    const supabase = supabaseBrowser()
+    const { error: signOutError } = await supabase.auth.signOut()
+    setSigningOut(false)
+
+    if (signOutError) {
+      setError(signOutError.message)
+      return
+    }
+
+    router.push('/login')
+    router.refresh()
+  }
+
+  function editField(focusId: string) {
+    setSuccessToast(null)
+    setMode('edit')
+    setPendingFocusId(focusId)
+  }
+
+    return (
+    <section className="relative rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+      {successToast && (
+        <div
+          className={`pointer-events-none absolute right-4 top-4 z-20 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 shadow-sm transition-all duration-300 ease-out ${
+            successToastVisible ? 'translate-x-0 opacity-100' : 'translate-x-6 opacity-0'
+          }`}
+        >
+          {successToast.message}
+        </div>
+      )}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Student account</h1>
@@ -614,7 +1021,8 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
           <button
             type="button"
             onClick={() => {
-              setSuccess(null)
+              setSuccessToast(null)
+              setSuccessToastVisible(false)
               setMode('edit')
             }}
             className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
@@ -641,45 +1049,183 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
           {error}
         </div>
       )}
-      {success && (
-        <div className="mt-5 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-          {success}
+
+      {returnTo && (
+        <div className="mt-5 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          {recoveryReady ? (
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p>Profile requirements are complete. Continue your application.</p>
+              <Link
+                href={returnTo}
+                onClick={() => clearStoredReturnTo()}
+                className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+              >
+                Continue Application
+              </Link>
+            </div>
+          ) : (
+            <p>
+              {recoveryCode === 'RESUME_REQUIRED'
+                ? 'Upload a resume and complete required profile fields to continue your application.'
+                : 'Complete required profile fields to continue your application.'}
+            </p>
+          )}
         </div>
       )}
-
       {mode === 'view' ? (
         <div className="mt-6 grid gap-4 sm:grid-cols-2">
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          {showCardHints && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 sm:col-span-2">
+              <div className="flex items-center gap-2">
+                <span className="inline-block h-2 w-2 rounded-full bg-amber-500" aria-hidden />
+                <span>{missingCount} sections still need completion.</span>
+              </div>
+            </div>
+          )}
+
+          <div className={`${cardClass(!completionFlags.identity)} sm:col-span-2`}>
+            {showCardHints && !completionFlags.identity && (
+              <span className="absolute right-12 top-2 h-2.5 w-2.5 rounded-full bg-amber-500" aria-hidden />
+            )}
+            <button
+              type="button"
+              aria-label="Edit identity"
+              onClick={() => editField('first-name')}
+              className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-600 hover:bg-slate-100"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden><path d="M13.83 3.34a2.5 2.5 0 1 1 3.54 3.54L8.3 15.96l-3.6.56.56-3.6 9.07-9.58Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+            <div className="flex items-center gap-4">
+              {profilePhotoUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={profilePhotoUrl}
+                  alt="Profile"
+                  className="h-14 w-14 rounded-full border border-slate-200 object-cover"
+                />
+              ) : (
+                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-blue-100 text-sm font-semibold text-blue-700">
+                  {initialsForName(firstName, lastName)}
+                </div>
+              )}
+              <div>
+                <div className="text-base font-semibold text-slate-900">
+                  {[firstName.trim(), lastName.trim()].filter(Boolean).join(' ') || 'Student'}
+                </div>
+                <div className="text-sm text-slate-600">{email || 'No email on file'}</div>
+                {profileHeadline && <div className="mt-1 text-sm text-slate-700">{profileHeadline}</div>}
+              </div>
+            </div>
+          </div>
+
+          <div className={cardClass(!completionFlags.university)}>
+            {showCardHints && !completionFlags.university && (
+              <span className="absolute right-12 top-2 h-2.5 w-2.5 rounded-full bg-amber-500" aria-hidden />
+            )}
+            <button
+              type="button"
+              aria-label="Edit university"
+              onClick={() => editField('university-input')}
+              className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-600 hover:bg-slate-100"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden><path d="M13.83 3.34a2.5 2.5 0 1 1 3.54 3.54L8.3 15.96l-3.6.56.56-3.6 9.07-9.58Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
             <div className="text-xs font-medium uppercase tracking-wide text-slate-500">University</div>
             <div className="mt-1 text-sm font-medium text-slate-900">{selectedUniversity?.name || universityQuery || 'Not set'}</div>
             {!selectedUniversity && universityQuery && (
               <div className="mt-1 text-xs text-amber-700">Unverified university. Edit profile to verify.</div>
             )}
           </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className={cardClass(!completionFlags.major)}>
+            {showCardHints && !completionFlags.major && (
+              <span className="absolute right-12 top-2 h-2.5 w-2.5 rounded-full bg-amber-500" aria-hidden />
+            )}
+            <button
+              type="button"
+              aria-label="Edit major"
+              onClick={() => editField('major-input')}
+              className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-600 hover:bg-slate-100"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden><path d="M13.83 3.34a2.5 2.5 0 1 1 3.54 3.54L8.3 15.96l-3.6.56.56-3.6 9.07-9.58Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
             <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Major / interest area</div>
             <div className="mt-1 text-sm font-medium text-slate-900">{major || 'Not set'}</div>
           </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className={cardClass(!completionFlags.graduationYear)}>
+            {showCardHints && !completionFlags.graduationYear && (
+              <span className="absolute right-12 top-2 h-2.5 w-2.5 rounded-full bg-amber-500" aria-hidden />
+            )}
+            <button
+              type="button"
+              aria-label="Edit graduation year"
+              onClick={() => editField('graduation-year-input')}
+              className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-600 hover:bg-slate-100"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden><path d="M13.83 3.34a2.5 2.5 0 1 1 3.54 3.54L8.3 15.96l-3.6.56.56-3.6 9.07-9.58Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
             <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Graduation year</div>
             <div className="mt-1 text-sm font-medium text-slate-900">{graduationYear || 'Not set'}</div>
           </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className={cardClass(!completionFlags.experience)}>
+            {showCardHints && !completionFlags.experience && (
+              <span className="absolute right-12 top-2 h-2.5 w-2.5 rounded-full bg-amber-500" aria-hidden />
+            )}
+            <button
+              type="button"
+              aria-label="Edit experience level"
+              onClick={() => editField('experience-level-input')}
+              className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-600 hover:bg-slate-100"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden><path d="M13.83 3.34a2.5 2.5 0 1 1 3.54 3.54L8.3 15.96l-3.6.56.56-3.6 9.07-9.58Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
             <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Experience level</div>
             <div className="mt-1 text-sm font-medium text-slate-900">{getExperienceLabel(experienceLevel)}</div>
           </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div id="availability" className={cardClass(!completionFlags.startMonth)}>
+            {showCardHints && !completionFlags.startMonth && (
+              <span className="absolute right-12 top-2 h-2.5 w-2.5 rounded-full bg-amber-500" aria-hidden />
+            )}
+            <button
+              type="button"
+              aria-label="Edit start month"
+              onClick={() => editField('start-month-input')}
+              className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-600 hover:bg-slate-100"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden><path d="M13.83 3.34a2.5 2.5 0 1 1 3.54 3.54L8.3 15.96l-3.6.56.56-3.6 9.07-9.58Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
             <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Availability start month</div>
             <div className="mt-1 text-sm font-medium text-slate-900">{availabilityStartMonth || 'Not set'}</div>
           </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className={cardClass(!completionFlags.hours)}>
+            {showCardHints && !completionFlags.hours && (
+              <span className="absolute right-12 top-2 h-2.5 w-2.5 rounded-full bg-amber-500" aria-hidden />
+            )}
+            <button
+              type="button"
+              aria-label="Edit hours per week"
+              onClick={() => editField('hours-per-week-input')}
+              className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-600 hover:bg-slate-100"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden><path d="M13.83 3.34a2.5 2.5 0 1 1 3.54 3.54L8.3 15.96l-3.6.56.56-3.6 9.07-9.58Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
             <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Hours per week</div>
             <div className="mt-1 text-sm font-medium text-slate-900">
-              {availabilityHoursPerWeek ? `${availabilityHoursPerWeek} hours/week` : 'Not set'}
+              {availabilityHoursPerWeek ? String(availabilityHoursPerWeek) : 'Not set'}
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
+          <div className={`${cardClass(!completionFlags.coursework)} sm:col-span-2`}>
+            {showCardHints && !completionFlags.coursework && (
+              <span className="absolute right-12 top-2 h-2.5 w-2.5 rounded-full bg-amber-500" aria-hidden />
+            )}
+            <button
+              type="button"
+              aria-label="Edit coursework"
+              onClick={() => editField('coursework-input')}
+              className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-600 hover:bg-slate-100"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden><path d="M13.83 3.34a2.5 2.5 0 1 1 3.54 3.54L8.3 15.96l-3.6.56.56-3.6 9.07-9.58Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
             <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Coursework</div>
             <div className="mt-2 flex flex-wrap gap-2">
               {coursework.length > 0 ? (
@@ -697,7 +1243,60 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
+          <div id="skills" className="relative rounded-xl border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
+            <button
+              type="button"
+              aria-label="Edit skills"
+              onClick={() => editField('skills-input')}
+              className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-600 hover:bg-slate-100"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden><path d="M13.83 3.34a2.5 2.5 0 1 1 3.54 3.54L8.3 15.96l-3.6.56.56-3.6 9.07-9.58Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Skills</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {skills.length > 0 ? (
+                skills.map((skill) => (
+                  <span
+                    key={skill}
+                    className="rounded-full border border-slate-300 bg-white px-3 py-1 text-sm text-slate-700"
+                  >
+                    {skill}
+                  </span>
+                ))
+              ) : (
+                <span className="text-sm text-slate-700">Not set</span>
+              )}
+            </div>
+          </div>
+
+          <div className="relative rounded-xl border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
+            <button
+              type="button"
+              aria-label="Edit resume"
+              onClick={() => editField('resume-input')}
+              className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-600 hover:bg-slate-100"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden><path d="M13.83 3.34a2.5 2.5 0 1 1 3.54 3.54L8.3 15.96l-3.6.56.56-3.6 9.07-9.58Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Resume</div>
+            <div className="mt-1 text-sm font-medium text-slate-900">
+              {resumeFileName || (resumeStoragePath ? 'Resume uploaded' : 'Not uploaded')}
+            </div>
+            <p className="mt-1 text-xs text-slate-600">Used automatically when you apply if you do not upload a new file.</p>
+          </div>
+
+          <div id="preferences" className={`${cardClass(!completionFlags.seasons)} sm:col-span-2`}>
+            {showCardHints && !completionFlags.seasons && (
+              <span className="absolute right-12 top-2 h-2.5 w-2.5 rounded-full bg-amber-500" aria-hidden />
+            )}
+            <button
+              type="button"
+              aria-label="Edit season preferences"
+              onClick={() => editField('season-summer')}
+              className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-600 hover:bg-slate-100"
+            >
+              <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4" aria-hidden><path d="M13.83 3.34a2.5 2.5 0 1 1 3.54 3.54L8.3 15.96l-3.6.56.56-3.6 9.07-9.58Z" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </button>
             <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Season preferences</div>
             <div className="mt-2 flex flex-wrap gap-2">
               {availability.length > 0 ? (
@@ -715,12 +1314,133 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
             </div>
             <div className="mt-3 text-sm text-slate-700">Remote OK: {remoteOk ? 'Yes' : 'No'}</div>
           </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
+            <div className="text-xs font-medium uppercase tracking-wide text-slate-500">Account settings</div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm text-slate-700">{email || 'No email on file'}</div>
+              <button
+                type="button"
+                onClick={signOut}
+                disabled={signingOut}
+                className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-60"
+              >
+                {signingOut ? 'Signing out...' : 'Sign out'}
+              </button>
+            </div>
+          </div>
         </div>
       ) : (
         <>
           <div className="mt-6 grid gap-5 sm:grid-cols-2">
+            <div>
+              <label className="text-sm font-medium text-slate-700">First name</label>
+              <input
+                id="first-name"
+                className={FIELD}
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                placeholder="First name"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-slate-700">Last name</label>
+              <input
+                id="last-name"
+                className={FIELD}
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                placeholder="Last name"
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="text-sm font-medium text-slate-700">Profile photo</label>
+              <div className="mt-2 flex flex-wrap items-center gap-4">
+                <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-full border border-slate-200 bg-slate-100">
+                  {profilePhotoPreviewUrl || profilePhotoUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={profilePhotoPreviewUrl || profilePhotoUrl}
+                      alt="Profile preview"
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-sm font-semibold text-slate-600">{initialsForName(firstName, lastName)}</span>
+                  )}
+                </div>
+                <div className="min-w-[260px] flex-1">
+                  <input
+                    id="profile-photo-input"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] ?? null
+                      if (!file) return
+                      if (!file.type.startsWith('image/')) {
+                        setError('Profile photo must be an image file.')
+                        return
+                      }
+                      if (file.size > maxProfilePhotoBytes) {
+                        setError('Profile photo must be 2MB or smaller.')
+                        return
+                      }
+                      setError(null)
+                      setProfilePhotoFile(file)
+                      if (profilePhotoPreviewUrl) {
+                        URL.revokeObjectURL(profilePhotoPreviewUrl)
+                      }
+                      setProfilePhotoPreviewUrl(URL.createObjectURL(file))
+                    }}
+                  />
+                  <p className="mt-1 text-xs text-slate-500">PNG, JPG, or WEBP. Max 2MB.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="text-sm font-medium text-slate-700">Profile headline (optional)</label>
+              <input
+                className={FIELD}
+                value={profileHeadline}
+                onChange={(e) => setProfileHeadline(e.target.value)}
+                placeholder="Finance student focused on internships in valuation and FP&A"
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="text-sm font-medium text-slate-700">Resume (PDF)</label>
+              <input
+                id="resume-input"
+                type="file"
+                accept="application/pdf"
+                className="mt-1 block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] ?? null
+                  if (!file) return
+                  const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+                  if (!isPdf) {
+                    setError('Resume must be a PDF.')
+                    return
+                  }
+                  if (file.size > maxResumeBytes) {
+                    setError('Resume must be 5MB or smaller.')
+                    return
+                  }
+                  setError(null)
+                  setResumeFile(file)
+                }}
+              />
+              <p className="mt-1 text-xs text-slate-500">
+                {resumeFile ? `${resumeFile.name} selected.` : resumeFileName ? `Current: ${resumeFileName}` : 'No resume uploaded yet.'}
+              </p>
+            </div>
+
             <div className="sm:col-span-2">
               <UniversityCombobox
+                inputId="university-input"
                 query={universityQuery}
                 onQueryChange={(value) => {
                   setUniversityQuery(value)
@@ -749,7 +1469,10 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
 
             <div>
               <label className="text-sm font-medium text-slate-700">Major / interest area</label>
-              <select className={FIELD} value={major} onChange={(e) => setMajor(e.target.value)}>
+              <select id="major-input" className={FIELD} value={major} onChange={(e) => setMajor(e.target.value)}>
+                <option value="" disabled hidden>
+                  Select major
+                </option>
                 {interestAreas.map((area) => (
                   <option key={area} value={area}>
                     {area}
@@ -760,7 +1483,12 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
 
             <div>
               <label className="text-sm font-medium text-slate-700">Graduation year</label>
-              <select className={FIELD} value={graduationYear} onChange={(e) => setGraduationYear(e.target.value)}>
+              <select
+                id="graduation-year-input"
+                className={FIELD}
+                value={graduationYear}
+                onChange={(e) => setGraduationYear(e.target.value)}
+              >
                 {graduationYears.map((year) => (
                   <option key={year} value={year}>
                     {year}
@@ -774,6 +1502,7 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
                 Relevant experience (in your intended field)
               </label>
               <select
+                id="experience-level-input"
                 className={FIELD}
                 value={experienceLevel}
                 onChange={(e) => setExperienceLevel(normalizeExperienceLevel(e.target.value))}
@@ -789,9 +1518,10 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
               </p>
             </div>
 
-            <div>
+            <div id="availability">
               <label className="text-sm font-medium text-slate-700">Availability start month</label>
               <select
+                id="start-month-input"
                 className={FIELD}
                 value={availabilityStartMonth}
                 onChange={(e) => setAvailabilityStartMonth(e.target.value)}
@@ -807,6 +1537,7 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
             <div>
               <label className="text-sm font-medium text-slate-700">Availability hours per week</label>
               <select
+                id="hours-per-week-input"
                 className={FIELD}
                 value={String(availabilityHoursPerWeek)}
                 onChange={(e) => setAvailabilityHoursPerWeek(Number(e.target.value))}
@@ -853,6 +1584,7 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
 
               <div className="relative mt-3">
                 <input
+                  id="coursework-input"
                   className={FIELD}
                   value={courseworkInput}
                   onChange={(e) => setCourseworkInput(e.target.value)}
@@ -899,13 +1631,57 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
               </div>
             </div>
 
-            <div className="sm:col-span-2">
+            <div id="skills" className="sm:col-span-2">
+              <label className="text-sm font-medium text-slate-700">Skills</label>
+              <div className="mt-2 flex gap-2">
+                <input
+                  id="skills-input"
+                  className={FIELD}
+                  value={skillInput}
+                  onChange={(e) => setSkillInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      addSkillItem(skillInput)
+                    }
+                  }}
+                  placeholder="Add skill (e.g., React, SQL, Excel)"
+                />
+                <button
+                  type="button"
+                  onClick={() => addSkillItem(skillInput)}
+                  className="mt-1 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 hover:bg-slate-50"
+                >
+                  Add
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">Press Enter to add each skill.</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {skills.length > 0 ? (
+                  skills.map((skill) => (
+                    <button
+                      key={skill}
+                      type="button"
+                      onClick={() => removeSkillItem(skill)}
+                      className="rounded-full border border-slate-300 bg-white px-3 py-1 text-sm text-slate-700 hover:bg-slate-50"
+                    >
+                      {skill} ×
+                    </button>
+                  ))
+                ) : (
+                  <span className="text-sm text-slate-500">No skills added yet.</span>
+                )}
+              </div>
+            </div>
+
+            <div id="preferences" className="sm:col-span-2">
               <div className="text-sm font-medium text-slate-700">Season preferences</div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {seasons.map((season) => {
                   const active = availability.includes(season)
                   return (
                     <button
+                      id={season === 'Summer' ? 'season-summer' : undefined}
                       key={season}
                       type="button"
                       onClick={() => toggleAvailability(season)}

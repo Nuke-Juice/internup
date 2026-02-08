@@ -93,3 +93,24 @@ using (
       and i.employer_id = auth.uid()
   )
 );
+
+create policy "applications_update_employer_internships"
+on public.applications
+for update
+to authenticated
+using (
+  exists (
+    select 1
+    from public.internships i
+    where i.id = applications.internship_id
+      and i.employer_id = auth.uid()
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.internships i
+    where i.id = applications.internship_id
+      and i.employer_id = auth.uid()
+  )
+);
