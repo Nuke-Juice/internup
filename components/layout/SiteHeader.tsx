@@ -22,6 +22,14 @@ function navClasses(isActive: boolean) {
   return 'rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50'
 }
 
+function primaryButtonClasses(isActive: boolean) {
+  if (isActive) {
+    return 'inline-flex items-center gap-1.5 rounded-md bg-blue-700 px-4 py-2 text-sm font-medium text-white shadow-sm'
+  }
+
+  return 'inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700 hover:shadow'
+}
+
 function iconNavClasses(isActive: boolean) {
   if (isActive) {
     return 'inline-flex items-center justify-center p-1 text-slate-800'
@@ -147,11 +155,9 @@ export default function SiteHeader({ isAuthenticated, role }: SiteHeaderProps) {
             ) : null}
 
             {!isAuthenticated ? (
-              <Link href="/login" className={navClasses(loginActive)}>
-                <span className="inline-flex items-center gap-1.5">
-                  <LogIn className="h-4 w-4" />
-                  Log in
-                </span>
+              <Link href="/login" className={primaryButtonClasses(loginActive)}>
+                <LogIn className="h-4 w-4" />
+                Log in
               </Link>
             ) : null}
 
