@@ -863,12 +863,6 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
               <input type="hidden" name="toast" value="Template selection updated" />
               <input type="hidden" name="toast_type" value="success" />
               <TemplatePicker options={INTERNSHIP_TEMPLATES} selectedTemplateKey={selectedTemplateKey} />
-              <button
-                type="submit"
-                className="h-10 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Apply
-              </button>
             </form>
           </div>
           <form action={createInternship} className="mt-4 grid gap-6 lg:grid-cols-2">
