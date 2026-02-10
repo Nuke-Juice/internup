@@ -124,7 +124,6 @@ export default function MajorCombobox({
         </div>
       ) : null}
 
-      {selectedMajor ? <p className="mt-1 text-xs text-emerald-700">Verified major: {selectedMajor.name}</p> : null}
       {error ? <p className="mt-1 text-xs text-red-600">{error}</p> : null}
     </div>
   )

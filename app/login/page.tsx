@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 import { isAdminRole, isAppRole, isUserRole } from '@/lib/auth/roles'
 import { supabaseServer } from '@/lib/supabase/server'
+import OAuthButtons from '@/components/auth/OAuthButtons'
 
 function getErrorMessage(message: string) {
   const normalized = message.toLowerCase()
@@ -86,6 +87,9 @@ export default function LoginPage({
         <p className="mt-2 text-slate-600">Use the email and password you created at signup.</p>
 
         <div className="mt-6 border-t border-slate-200 pt-6">
+        <div className="mb-4 rounded-2xl border border-slate-300 bg-white p-4 shadow-sm">
+          <OAuthButtons />
+        </div>
         <form action={signIn} className="space-y-4 rounded-2xl border border-slate-300 bg-white p-6 shadow-md">
           {nextPath ? <input type="hidden" name="next" value={nextPath} /> : null}
           <div>

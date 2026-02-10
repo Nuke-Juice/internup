@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import TurnstileWidget from '@/components/security/TurnstileWidget'
+import OAuthButtons from '@/components/auth/OAuthButtons'
 
 const FIELD =
   'mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100'
@@ -34,6 +35,8 @@ export default function EmployerSignupPage() {
 
     setLoading(true)
     const supabase = supabaseBrowser()
+    const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/+$/, '')
+    const appOrigin = configuredAppUrl || window.location.origin
     try {
       const captchaResponse = await fetch('/api/turnstile/verify', {
         method: 'POST',
@@ -60,6 +63,19 @@ export default function EmployerSignupPage() {
     const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        emailRedirectTo: `${appOrigin}/auth/callback?next=${encodeURIComponent('/account?role=employer')}`,
+        data: {
+          role_hint: 'employer',
+          signup_profile: {
+            company_name: companyName,
+            website: website || null,
+            contact_email: contactEmail || email,
+            industry: industry || null,
+            location: location || null,
+          },
+        },
+      },
     })
 
     if (signUpError) {
@@ -79,20 +95,25 @@ export default function EmployerSignupPage() {
       return setError('Signup succeeded but no user returned.')
     }
 
-    await supabase.from('users').insert({
+    if (!data.session) {
+      setLoading(false)
+      return setError('Verification email sent. Check your inbox, then click the link to finish signup.')
+    }
+
+    await supabase.from('users').upsert({
       id: userId,
       role: 'employer',
       verified: false,
-    })
+    }, { onConflict: 'id' })
 
-    await supabase.from('employer_profiles').insert({
+    await supabase.from('employer_profiles').upsert({
       user_id: userId,
       company_name: companyName,
       website: website || null,
       contact_email: contactEmail || email,
       industry: industry || null,
       location: location || null,
-    })
+    }, { onConflict: 'user_id' })
 
     setLoading(false)
     window.location.href = '/employer'
@@ -122,6 +143,10 @@ export default function EmployerSignupPage() {
 
         <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-900">Account</h2>
+          <OAuthButtons roleHint="employer" className="mt-4" />
+          <div className="mt-4 border-t border-slate-200 pt-4">
+            <p className="text-xs text-slate-500">Or continue with email and password.</p>
+          </div>
 
           <div className="mt-4 space-y-4">
             <div>
