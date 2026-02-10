@@ -71,7 +71,11 @@ export type InternshipMatchResult = {
 }
 
 function normalizeText(value: string) {
-  return value.trim().toLowerCase()
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
 }
 
 export function parseMajors(value: string[] | string | null | undefined) {

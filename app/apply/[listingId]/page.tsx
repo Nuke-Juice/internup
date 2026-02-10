@@ -187,7 +187,7 @@ export default async function ApplyPage({
     const [{ data: profile }, { data: studentCourseworkCategoryRows }] = await Promise.all([
       supabaseAction
         .from('student_profiles')
-        .select('school, majors, year, experience_level, coursework, interests, availability_start_month, availability_hours_per_week')
+        .select('school, major_id, majors, year, experience_level, coursework, interests, availability_start_month, availability_hours_per_week')
         .eq('user_id', currentUser.id)
         .maybeSingle(),
       supabaseAction.from('student_coursework_category_links').select('category_id').eq('student_id', currentUser.id),

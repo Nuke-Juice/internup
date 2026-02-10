@@ -67,6 +67,19 @@ function parseCityState(value: string | null | undefined) {
   }
 }
 
+function canonicalMajorName(value: unknown) {
+  if (!value) return null
+  if (Array.isArray(value)) {
+    const first = value[0] as { name?: unknown } | undefined
+    return typeof first?.name === 'string' ? first.name : null
+  }
+  if (typeof value === 'object' && value !== null) {
+    const maybe = value as { name?: unknown }
+    return typeof maybe.name === 'string' ? maybe.name : null
+  }
+  return null
+}
+
 export default async function JobDetailPage({
   params,
 }: {
@@ -140,7 +153,7 @@ export default async function JobDetailPage({
       supabase
         .from('student_profiles')
         .select(
-          'majors, year, experience_level, coursework, interests, availability_start_month, availability_hours_per_week, preferred_city, preferred_state, preferred_zip, max_commute_minutes, transport_mode, location_lat, location_lng'
+          'major_id, major:canonical_majors(id, slug, name), majors, year, experience_level, coursework, interests, availability_start_month, availability_hours_per_week, preferred_city, preferred_state, preferred_zip, max_commute_minutes, transport_mode, location_lat, location_lng'
         )
         .eq('user_id', user.id)
         .maybeSingle(),
@@ -199,7 +212,10 @@ export default async function JobDetailPage({
           .filter((value): value is string => value.length > 0),
       },
       {
-        majors: parseMajors(profile?.majors ?? null),
+        majors: (() => {
+          const majorName = canonicalMajorName(profile?.major)
+          return majorName ? parseMajors([majorName]) : parseMajors(profile?.majors ?? null)
+        })(),
         year: profile?.year ?? null,
         experience_level: profile?.experience_level ?? null,
         skills: preferenceSignals.skills,

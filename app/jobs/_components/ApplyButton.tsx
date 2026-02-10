@@ -1,11 +1,12 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import { APPLY_ERROR } from '@/lib/applyErrors'
 import { buildAccountRecoveryHref } from '@/lib/applyRecovery'
 import { applyFromMicroOnboardingAction } from './applyActions'
+import MajorCombobox, { type CanonicalMajor } from '@/components/account/MajorCombobox'
 
 type Props = {
   listingId: string
@@ -32,7 +33,11 @@ export default function ApplyButton({ listingId, isAuthenticated, userRole = nul
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [school, setSchool] = useState('')
-  const [major, setMajor] = useState('')
+  const [majorQuery, setMajorQuery] = useState('')
+  const [selectedMajor, setSelectedMajor] = useState<CanonicalMajor | null>(null)
+  const [majorCatalog, setMajorCatalog] = useState<CanonicalMajor[]>([])
+  const [majorsLoading, setMajorsLoading] = useState(false)
+  const [majorCatalogError, setMajorCatalogError] = useState<string | null>(null)
   const [availability, setAvailability] = useState(20)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -45,6 +50,42 @@ export default function ApplyButton({ listingId, isAuthenticated, userRole = nul
       'inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700',
     [className]
   )
+
+  useEffect(() => {
+    const supabase = supabaseBrowser()
+    let active = true
+
+    async function loadMajorCatalog() {
+      setMajorsLoading(true)
+      const { data, error: catalogError } = await supabase
+        .from('canonical_majors')
+        .select('id, slug, name')
+        .order('name', { ascending: true })
+        .limit(500)
+
+      if (!active) return
+      if (catalogError) {
+        setMajorCatalogError('Could not load majors right now.')
+        setMajorsLoading(false)
+        return
+      }
+
+      setMajorCatalog(
+        (data ?? []).filter(
+          (row): row is CanonicalMajor =>
+            typeof row.id === 'string' &&
+            typeof row.slug === 'string' &&
+            typeof row.name === 'string'
+        )
+      )
+      setMajorsLoading(false)
+    }
+
+    void loadMajorCatalog()
+    return () => {
+      active = false
+    }
+  }, [])
 
   async function trackApplyClick() {
     try {
@@ -65,7 +106,7 @@ export default function ApplyButton({ listingId, isAuthenticated, userRole = nul
   async function submitMicroOnboarding() {
     setError(null)
 
-    if (!school.trim() || !major.trim()) {
+    if (!school.trim() || !selectedMajor) {
       return setError('School and major are required.')
     }
     if (!email.trim() || !password.trim()) {
@@ -140,7 +181,8 @@ export default function ApplyButton({ listingId, isAuthenticated, userRole = nul
       {
         user_id: user.id,
         school: school.trim(),
-        majors: [major.trim()],
+        major_id: selectedMajor.id,
+        majors: [selectedMajor.name],
         year: 'Freshman',
         coursework: [],
         experience_level: 'none',
@@ -297,13 +339,30 @@ export default function ApplyButton({ listingId, isAuthenticated, userRole = nul
               </div>
 
               <div>
-                <label className="text-sm font-medium text-slate-700">Major</label>
-                <input
-                  className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                  value={major}
-                  onChange={(event) => setMajor(event.target.value)}
-                  placeholder="e.g., Finance"
+                <MajorCombobox
+                  inputId="apply-major-input"
+                  label="Major"
+                  query={majorQuery}
+                  onQueryChange={(value) => {
+                    setMajorQuery(value)
+                    if (selectedMajor && value.trim() !== selectedMajor.name) {
+                      setSelectedMajor(null)
+                    }
+                  }}
+                  options={majorCatalog}
+                  selectedMajor={selectedMajor}
+                  onSelect={(majorOption) => {
+                    setSelectedMajor(majorOption)
+                    setMajorQuery(majorOption.name)
+                    setMajorCatalogError(null)
+                  }}
+                  loading={majorsLoading}
+                  error={majorCatalogError}
+                  placeholder="Start typing your major"
                 />
+                {!selectedMajor && majorQuery.trim().length > 0 ? (
+                  <p className="mt-1 text-xs text-amber-700">Select a verified major from the dropdown.</p>
+                ) : null}
               </div>
 
               <div>

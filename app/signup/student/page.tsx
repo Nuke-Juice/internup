@@ -1,10 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import TurnstileWidget from '@/components/security/TurnstileWidget'
+import MajorCombobox, { type CanonicalMajor } from '@/components/account/MajorCombobox'
 
 const COURSEWORK = [
   'Accounting 101',
@@ -28,7 +29,11 @@ export default function StudentSignupPage() {
   const [school, setSchool] = useState('University of Utah')
   const [year, setYear] = useState('Freshman')
   const [gender, setGender] = useState('')
-  const [majorsText, setMajorsText] = useState('')
+  const [majorQuery, setMajorQuery] = useState('')
+  const [selectedMajor, setSelectedMajor] = useState<CanonicalMajor | null>(null)
+  const [majorCatalog, setMajorCatalog] = useState<CanonicalMajor[]>([])
+  const [majorsLoading, setMajorsLoading] = useState(true)
+  const [majorError, setMajorError] = useState<string | null>(null)
   const [coursework, setCoursework] = useState<string[]>([])
   const experience: 'none' | 'projects' | 'internship' = 'none'
   const startMonth = 'May'
@@ -42,12 +47,41 @@ export default function StudentSignupPage() {
     setCoursework((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]))
   }
 
+  useEffect(() => {
+    const supabase = supabaseBrowser()
+
+    async function loadMajorCatalog() {
+      setMajorsLoading(true)
+      const { data, error: catalogError } = await supabase
+        .from('canonical_majors')
+        .select('id, slug, name')
+        .order('name', { ascending: true })
+        .limit(500)
+
+      if (catalogError) {
+        setMajorError('Could not load majors right now.')
+        setMajorsLoading(false)
+        return
+      }
+
+      setMajorCatalog(
+        (data ?? []).filter(
+          (row): row is CanonicalMajor =>
+            typeof row.id === 'string' &&
+            typeof row.slug === 'string' &&
+            typeof row.name === 'string'
+        )
+      )
+      setMajorsLoading(false)
+    }
+
+    void loadMajorCatalog()
+  }, [])
+
   async function createAccount() {
     setError(null)
-
-    const majors = majorsText.split(',').map((m) => m.trim()).filter(Boolean)
     if (!email || !password) return setError('Email and password are required.')
-    if (majors.length === 0) return setError('Please enter at least one major.')
+    if (!selectedMajor) return setError('Please select a verified major.')
     if (!turnstileToken) return setError(friendlyCaptchaError)
 
     setLoading(true)
@@ -107,7 +141,8 @@ export default function StudentSignupPage() {
       user_id: userId,
       school,
       gender: gender || null,
-      majors,
+      major_id: selectedMajor.id,
+      majors: [selectedMajor.name],
       year,
       coursework,
       experience_level: experience,
@@ -177,14 +212,34 @@ export default function StudentSignupPage() {
                   <option value="">Prefer not to say</option>
                   <option value="female">Female</option>
                   <option value="male">Male</option>
-                  <option value="non-binary">Non-binary</option>
-                  <option value="self-describe">Self-describe</option>
                 </select>
               </div>
 
               <div className="sm:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Majors</label>
-                <input className={FIELD} value={majorsText} onChange={(e) => setMajorsText(e.target.value)} />
+                <MajorCombobox
+                  inputId="student-signup-major"
+                  label="Major"
+                  query={majorQuery}
+                  onQueryChange={(value) => {
+                    setMajorQuery(value)
+                    if (selectedMajor && value.trim() !== selectedMajor.name) {
+                      setSelectedMajor(null)
+                    }
+                  }}
+                  options={majorCatalog}
+                  selectedMajor={selectedMajor}
+                  onSelect={(major) => {
+                    setSelectedMajor(major)
+                    setMajorQuery(major.name)
+                    setMajorError(null)
+                  }}
+                  loading={majorsLoading}
+                  error={majorError}
+                  placeholder="Start typing your major"
+                />
+                {!selectedMajor && majorQuery.trim().length > 0 ? (
+                  <p className="mt-1 text-xs text-amber-700">Select a verified major from the dropdown.</p>
+                ) : null}
               </div>
 
               <div className="sm:col-span-2">

@@ -42,6 +42,7 @@ type ApplicationRow = {
 type StudentProfileRow = {
   user_id: string
   school: string | null
+  major?: { name?: string | null } | null
   majors: string[] | string | null
   year: string | null
 }
@@ -65,10 +66,24 @@ function parseReasons(value: unknown) {
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
 }
 
-function formatMajor(value: string[] | string | null | undefined) {
+function formatMajor(value: string[] | string | null | undefined, canonicalName?: string | null) {
+  if (typeof canonicalName === 'string' && canonicalName.trim()) return canonicalName
   if (Array.isArray(value)) return value[0] ?? 'Major not set'
   if (typeof value === 'string' && value.trim()) return value
   return 'Major not set'
+}
+
+function canonicalMajorName(value: unknown) {
+  if (!value) return null
+  if (Array.isArray(value)) {
+    const first = value[0] as { name?: unknown } | undefined
+    return typeof first?.name === 'string' ? first.name : null
+  }
+  if (typeof value === 'object' && value !== null) {
+    const maybe = value as { name?: unknown }
+    return typeof maybe.name === 'string' ? maybe.name : null
+  }
+  return null
 }
 
 function formatDate(value: string | null) {
@@ -175,7 +190,10 @@ export default async function AdminInternshipApplicantsPage({
 
   const { data: profileRows } =
     studentIds.length > 0
-      ? await admin.from('student_profiles').select('user_id, school, majors, year').in('user_id', studentIds)
+      ? await admin
+          .from('student_profiles')
+          .select('user_id, school, major:canonical_majors(name), majors, year')
+          .in('user_id', studentIds)
       : { data: [] as StudentProfileRow[] }
 
   const profileByStudentId = new Map<string, StudentProfileRow>()
@@ -213,7 +231,7 @@ export default async function AdminInternshipApplicantsPage({
       fallbackId: application.student_id,
     })
     const school = profile?.school?.trim() || 'School not set'
-    const major = formatMajor(profile?.majors)
+    const major = formatMajor(profile?.majors, canonicalMajorName(profile?.major))
     const gradYear = profile?.year?.trim() || 'Grad year not set'
     const topReasons = parseReasons(application.match_reasons).slice(0, 3)
     const resumeUrl = application.resume_url ? signedResumeUrlByPath.get(application.resume_url) ?? null : null
@@ -346,7 +364,10 @@ export default async function AdminInternshipApplicantsPage({
 
     const [{ data: topProfiles }, topAuthUsers, topResumeSigned] = await Promise.all([
       topStudentIds.length > 0
-        ? adminWrite.from('student_profiles').select('user_id, school, majors, year').in('user_id', topStudentIds)
+        ? adminWrite
+            .from('student_profiles')
+            .select('user_id, school, major:canonical_majors(name), majors, year')
+            .in('user_id', topStudentIds)
         : Promise.resolve({ data: [] as StudentProfileRow[] }),
       Promise.all(
         topStudentIds.map(async (studentId) => {
@@ -383,7 +404,7 @@ export default async function AdminInternshipApplicantsPage({
           fallbackId: candidate.student_id,
         }),
         school: profile?.school?.trim() || 'School not set',
-        major: formatMajor(profile?.majors),
+        major: formatMajor(profile?.majors, canonicalMajorName(profile?.major)),
         gradYear: profile?.year?.trim() || 'Grad year not set',
         matchScore: candidate.match_score,
         topReasons: parseReasons(candidate.match_reasons).slice(0, 3),

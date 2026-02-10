@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Pencil } from 'lucide-react'
+import MajorCombobox, { type CanonicalMajor } from '@/components/account/MajorCombobox'
 import UniversityCombobox from '@/components/account/UniversityCombobox'
 import { useToast } from '@/components/feedback/ToastProvider'
 import { normalizeCatalogLabel, normalizeCatalogToken } from '@/lib/catalog/normalization'
@@ -22,6 +23,8 @@ import { normalizeSkillsClient } from '@/lib/skills/normalizeSkillsClient'
 type StudentProfileRow = {
   university_id: string | number | null
   school: string | null
+  major_id: string | null
+  major?: { id?: string | null; slug?: string | null; name?: string | null } | null
   majors: string[] | string | null
   year: string | null
   coursework: string[] | string | null
@@ -56,19 +59,6 @@ type Props = {
 
 const FIELD =
   'mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100'
-
-const interestAreas = [
-  'Finance',
-  'Accounting',
-  'Data',
-  'Marketing',
-  'Product',
-  'Operations',
-  'Design',
-  'Sales',
-  'HR',
-  'Engineering',
-]
 
 const graduationYears = ['2026', '2027', '2028', '2029', '2030']
 const experienceLevels: Array<{ label: string; value: ExperienceLevel }> = [
@@ -121,6 +111,12 @@ function getPrimaryMajor(value: StudentProfileRow['majors']) {
   if (Array.isArray(value)) return value[0] ?? ''
   if (typeof value === 'string') return value
   return ''
+}
+
+function getMajorLabelFromProfile(row: Record<string, unknown>) {
+  const joined = row.major as { name?: string | null } | null
+  if (joined?.name && typeof joined.name === 'string') return joined.name.trim()
+  return getPrimaryMajor((row.majors as StudentProfileRow['majors']) ?? null)
 }
 
 function getCourseworkText(value: StudentProfileRow['coursework']) {
@@ -246,7 +242,11 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
   const [resumeFile, setResumeFile] = useState<File | null>(null)
   const [profileHeadline, setProfileHeadline] = useState('')
 
-  const [major, setMajor] = useState(getPrimaryMajor(initialProfile?.majors ?? null) || 'Finance')
+  const [major, setMajor] = useState(getPrimaryMajor(initialProfile?.majors ?? null) || '')
+  const [selectedMajorId, setSelectedMajorId] = useState<string | null>(initialProfile?.major_id ?? null)
+  const [majorQuery, setMajorQuery] = useState(getPrimaryMajor(initialProfile?.majors ?? null) || '')
+  const [majorCatalog, setMajorCatalog] = useState<CanonicalMajor[]>([])
+  const [majorError, setMajorError] = useState<string | null>(null)
   const [graduationYear, setGraduationYear] = useState(initialProfile?.year ?? '2028')
   const [coursework, setCoursework] = useState<string[]>(getCourseworkText(initialProfile?.coursework ?? null))
   const [courseworkInput, setCourseworkInput] = useState('')
@@ -319,7 +319,7 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
     return {
       identity: Boolean(firstName.trim() && lastName.trim()),
       university: Boolean(selectedUniversity || universityQuery.trim()),
-      major: Boolean(major.trim()),
+      major: Boolean(selectedMajorId),
       graduationYear: Boolean(graduationYear.trim() && graduationYear !== 'Not set'),
       experience: validExperience,
       startMonth: Boolean(availabilityStartMonth.trim()),
@@ -337,6 +337,7 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
     graduationYear,
     lastName,
     major,
+    selectedMajorId,
     selectedUniversity,
     universityQuery,
   ])
@@ -348,17 +349,28 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
   const minimumProfileReady = useMemo(() => {
     return getMinimumProfileCompleteness({
       school: selectedUniversity?.name ?? universityQuery ?? null,
-      majors: major ? [major] : [],
+      majors: selectedMajorId && major ? [major] : [],
       availability_start_month: availabilityStartMonth,
       availability_hours_per_week: availabilityHoursPerWeek,
     }).ok
-  }, [availabilityHoursPerWeek, availabilityStartMonth, major, selectedUniversity?.name, universityQuery])
+  }, [availabilityHoursPerWeek, availabilityStartMonth, major, selectedMajorId, selectedUniversity?.name, universityQuery])
 
   const hasResumeForApply = useMemo(() => {
     return Boolean(resumeStoragePath.trim() || resumeFile)
   }, [resumeFile, resumeStoragePath])
 
   const recoveryReady = minimumProfileReady && hasResumeForApply
+  const selectedMajor = useMemo(() => {
+    if (selectedMajorId) {
+      const byId = majorCatalog.find((item) => item.id === selectedMajorId)
+      if (byId) return byId
+    }
+    if (major.trim()) {
+      const byName = majorCatalog.find((item) => item.name.toLowerCase() === major.trim().toLowerCase())
+      if (byName) return byName
+    }
+    return null
+  }, [major, majorCatalog, selectedMajorId])
 
   const showCardHints = mode === 'view' && isProfileLoaded && showIncompleteGuide && missingCount > 0
 
@@ -388,11 +400,13 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
         .maybeSingle()
 
       if (loadError || !data) {
-        const [{ data: skillCatalogRows }, { data: courseworkCatalogRows }, { data: courseworkCategoryRows }] = await Promise.all([
-          supabase.from('skills').select('label').order('label', { ascending: true }).limit(1200),
-          supabase.from('coursework_items').select('name').order('name', { ascending: true }).limit(1200),
-          supabase.from('coursework_categories').select('name').order('name', { ascending: true }).limit(500),
-        ])
+        const [{ data: skillCatalogRows }, { data: courseworkCatalogRows }, { data: courseworkCategoryRows }, { data: majorCatalogRows }] =
+          await Promise.all([
+            supabase.from('skills').select('label').order('label', { ascending: true }).limit(1200),
+            supabase.from('coursework_items').select('name').order('name', { ascending: true }).limit(1200),
+            supabase.from('coursework_categories').select('name').order('name', { ascending: true }).limit(500),
+            supabase.from('canonical_majors').select('id, slug, name').order('name', { ascending: true }).limit(500),
+          ])
         setCanonicalSkillOptions(
           (skillCatalogRows ?? [])
             .map((item) => (typeof item.label === 'string' ? item.label.trim() : ''))
@@ -408,13 +422,20 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
             .map((item) => (typeof item.name === 'string' ? item.name.trim() : ''))
             .filter(Boolean)
         )
+        setMajorCatalog(
+          (majorCatalogRows ?? []).filter(
+            (item): item is CanonicalMajor =>
+              typeof item.id === 'string' && typeof item.slug === 'string' && typeof item.name === 'string'
+          )
+        )
         setLoading(false)
         setIsProfileLoaded(true)
         return
       }
 
       const row = data as Record<string, unknown>
-      const dbMajor = getPrimaryMajor((row.majors as StudentProfileRow['majors']) ?? null)
+      const dbMajor = getMajorLabelFromProfile(row)
+      const dbMajorId = typeof row.major_id === 'string' ? row.major_id : null
       const dbCoursework = getCourseworkText((row.coursework as StudentProfileRow['coursework']) ?? null)
       const dbStartMonth =
         typeof row.availability_start_month === 'string' && row.availability_start_month.trim()
@@ -429,6 +450,7 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
         { data: skillCatalogRows },
         { data: courseworkCatalogRows },
         { data: courseworkCategoryRows },
+        { data: majorCatalogRows },
       ] =
         await Promise.all([
           supabase
@@ -446,6 +468,7 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
           supabase.from('skills').select('label').order('label', { ascending: true }).limit(1200),
           supabase.from('coursework_items').select('name').order('name', { ascending: true }).limit(1200),
           supabase.from('coursework_categories').select('name').order('name', { ascending: true }).limit(500),
+          supabase.from('canonical_majors').select('id, slug, name').order('name', { ascending: true }).limit(500),
         ])
       const { data: authData } = await supabase.auth.getUser()
       const authUser = authData.user
@@ -470,7 +493,9 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
           ? authMetadata.last_name
           : nameTokens.slice(1).join(' ')
 
-      setMajor(dbMajor || 'Finance')
+      setMajor(dbMajor || '')
+      setMajorQuery(dbMajor || '')
+      setSelectedMajorId(dbMajorId)
       setGraduationYear((row.year as string) ?? '2028')
       const canonicalSkillLabels = (canonicalSkillRows ?? [])
         .map((rowItem) => {
@@ -505,6 +530,19 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
           .map((item) => (typeof item.name === 'string' ? item.name.trim() : ''))
           .filter(Boolean)
       )
+      const majorsCatalog = (majorCatalogRows ?? []).filter(
+        (item): item is CanonicalMajor =>
+          typeof item.id === 'string' && typeof item.slug === 'string' && typeof item.name === 'string'
+      )
+      setMajorCatalog(majorsCatalog)
+      if (!dbMajorId && dbMajor) {
+        const matchedByName = majorsCatalog.find((item) => item.name.toLowerCase() === dbMajor.toLowerCase())
+        if (matchedByName) {
+          setSelectedMajorId(matchedByName.id)
+          setMajor(matchedByName.name)
+          setMajorQuery(matchedByName.name)
+        }
+      }
       setCoursework(canonicalCourseworkLabels.length > 0 ? canonicalCourseworkLabels : dbCoursework)
       setCourseworkCategories(canonicalCourseworkCategoryLabels)
       setSkills(canonicalSkillLabels.length > 0 ? canonicalSkillLabels : (parsedPreferences?.skills ?? []))
@@ -724,7 +762,7 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
       void (async () => {
         if (!active) return
 
-        if (!selectedUniversity || !major.trim()) {
+        if (!selectedUniversity || !selectedMajorId || !major.trim()) {
           setSuggestedCoursework([])
           return
         }
@@ -779,7 +817,7 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
       active = false
       clearTimeout(timer)
     }
-  }, [major, selectedUniversity])
+  }, [major, selectedMajorId, selectedUniversity])
 
 function addCourseworkItem(value: string) {
     const normalized = normalizeCourseworkName(value)
@@ -835,6 +873,11 @@ function addCourseworkItem(value: string) {
       setError('Please select a verified university before saving.')
       return
     }
+    if (!selectedMajor?.id) {
+      setMajorError('Select a verified major from the list.')
+      setError('Please select a verified major before saving.')
+      return
+    }
 
     if (availability.length === 0) {
       setError('Select at least one season.')
@@ -878,7 +921,7 @@ function addCourseworkItem(value: string) {
           : [],
       }
     })()
-    const normalizedMajor = major.trim() || null
+    const normalizedMajor = selectedMajor.name.trim() || null
     let avatarUrl = profilePhotoUrl.trim()
     let resumePath = resumeStoragePath.trim()
     let resumeName = resumeFileName.trim()
@@ -952,6 +995,7 @@ function addCourseworkItem(value: string) {
       user_id: userId,
       university_id: selectedUniversity.id,
       school: selectedUniversity.name,
+      major_id: selectedMajor.id,
       year: graduationYear.trim() || null,
       experience_level: safeExperienceLevel,
       availability_start_month: availabilityStartMonth.trim() || null,
@@ -1732,17 +1776,35 @@ function addCourseworkItem(value: string) {
             </div>
 
             <div>
-              <label className="text-sm font-medium text-slate-700">Major / interest area</label>
-              <select id="major-input" className={FIELD} value={major} onChange={(e) => setMajor(e.target.value)}>
-                <option value="" disabled hidden>
-                  Select major
-                </option>
-                {interestAreas.map((area) => (
-                  <option key={area} value={area}>
-                    {area}
-                  </option>
-                ))}
-              </select>
+              <MajorCombobox
+                inputId="major-input"
+                label="Major"
+                query={majorQuery}
+                onQueryChange={(value) => {
+                  setMajorQuery(value)
+                  setMajor(value)
+                  setMajorError(null)
+                  setError(null)
+                  if (selectedMajor && value.trim() !== selectedMajor.name) {
+                    setSelectedMajorId(null)
+                  }
+                }}
+                options={majorCatalog}
+                selectedMajor={selectedMajor}
+                onSelect={(majorOption) => {
+                  setSelectedMajorId(majorOption.id)
+                  setMajor(majorOption.name)
+                  setMajorQuery(majorOption.name)
+                  setMajorError(null)
+                  setError(null)
+                }}
+                loading={loading}
+                error={majorError}
+                placeholder="Start typing your major"
+              />
+              {!selectedMajor && majorQuery.trim().length > 0 && !majorError ? (
+                <p className="mt-1 text-xs text-amber-700">Select a verified major from the dropdown.</p>
+              ) : null}
             </div>
 
             <div>

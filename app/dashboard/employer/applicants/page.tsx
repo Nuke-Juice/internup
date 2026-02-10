@@ -51,10 +51,24 @@ function applicantName(studentId: string) {
   return `Applicant ${studentId.slice(0, 8)}`
 }
 
-function formatMajor(value: string[] | string | null | undefined) {
+function formatMajor(value: string[] | string | null | undefined, canonicalName?: string | null) {
+  if (typeof canonicalName === 'string' && canonicalName.trim()) return canonicalName
   if (Array.isArray(value)) return value[0] ?? 'Major not set'
   if (typeof value === 'string' && value.trim()) return value
   return 'Major not set'
+}
+
+function canonicalMajorName(value: unknown) {
+  if (!value) return null
+  if (Array.isArray(value)) {
+    const first = value[0] as { name?: unknown } | undefined
+    return typeof first?.name === 'string' ? first.name : null
+  }
+  if (typeof value === 'object' && value !== null) {
+    const maybe = value as { name?: unknown }
+    return typeof maybe.name === 'string' ? maybe.name : null
+  }
+  return null
 }
 
 export default async function EmployerApplicantsPage({ searchParams }: { searchParams?: SearchParams }) {
@@ -106,15 +120,26 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
   const studentIds = Array.from(new Set(applications.map((row) => row.student_id)))
   const { data: profiles } =
     studentIds.length > 0
-      ? await supabase.from('student_profiles').select('user_id, school, majors, year').in('user_id', studentIds)
-      : { data: [] as Array<{ user_id: string; school: string | null; majors: string[] | string | null; year: string | null }> }
+      ? await supabase
+          .from('student_profiles')
+          .select('user_id, school, major:canonical_majors(name), majors, year')
+          .in('user_id', studentIds)
+      : {
+          data: [] as Array<{
+            user_id: string
+            school: string | null
+            major: { name?: string | null } | null
+            majors: string[] | string | null
+            year: string | null
+          }>,
+        }
 
   const profileByStudentId = new Map(
     (profiles ?? []).map((profile) => [
       profile.user_id,
       {
         school: profile.school ?? 'University not set',
-        major: formatMajor(profile.majors),
+        major: formatMajor(profile.majors, canonicalMajorName(profile.major)),
         year: profile.year ?? 'Grad year not set',
       },
     ])

@@ -66,6 +66,19 @@ function parseCityState(value: string | null | undefined) {
   }
 }
 
+function canonicalMajorName(value: unknown) {
+  if (!value) return null
+  if (Array.isArray(value)) {
+    const first = value[0] as { name?: unknown } | undefined
+    return typeof first?.name === 'string' ? first.name : null
+  }
+  if (typeof value === 'object' && value !== null) {
+    const maybe = value as { name?: unknown }
+    return typeof maybe.name === 'string' ? maybe.name : null
+  }
+  return null
+}
+
 function extractNumericPayRange(pay: string | null | undefined) {
   if (!pay) return null
   const matches = pay.match(/(\d+(?:\.\d+)?)/g)
@@ -81,6 +94,8 @@ function extractNumericPayRange(pay: string | null | undefined) {
 function getStudentProfileCompletion(profile: {
   university_id?: string | number | null
   school?: string | null
+  major_id?: string | null
+  major?: unknown
   majors?: string[] | string | null
   year?: string | null
   coursework?: string[] | string | null
@@ -90,7 +105,8 @@ function getStudentProfileCompletion(profile: {
 } | null) {
   if (!profile) return { completed: 0, total: 7, percent: 0, isComplete: false }
 
-  const majors = parseMajors(profile.majors ?? null)
+  const majorName = canonicalMajorName(profile.major)
+  const majors = majorName ? parseMajors([majorName]) : parseMajors(profile.majors ?? null)
   const coursework =
     Array.isArray(profile.coursework)
       ? profile.coursework.filter((course): course is string => typeof course === 'string' && course.trim().length > 0)
@@ -251,7 +267,7 @@ export default async function JobsView({
     const { data: profile } = await supabase
       .from('student_profiles')
       .select(
-        'university_id, school, majors, year, coursework, experience_level, availability_start_month, availability_hours_per_week, interests, preferred_city, preferred_state, preferred_zip, max_commute_minutes, transport_mode, location_lat, location_lng'
+        'university_id, school, major_id, major:canonical_majors(id, slug, name), majors, year, coursework, experience_level, availability_start_month, availability_hours_per_week, interests, preferred_city, preferred_state, preferred_zip, max_commute_minutes, transport_mode, location_lat, location_lng'
       )
       .eq('user_id', user.id)
       .maybeSingle()
@@ -261,7 +277,8 @@ export default async function JobsView({
       supabase.from('student_coursework_category_links').select('category_id').eq('student_id', user.id),
     ])
 
-    profileMajors = parseMajors(profile?.majors ?? null)
+    const profileMajorName = canonicalMajorName(profile?.major)
+    profileMajors = profileMajorName ? parseMajors([profileMajorName]) : parseMajors(profile?.majors ?? null)
     profileYear = profile?.year ?? null
     profileExperienceLevel = profile?.experience_level ?? null
     profileAvailability = profile?.availability_hours_per_week ?? null

@@ -12,6 +12,8 @@ const isDev = process.env.NODE_ENV !== 'production'
 type StudentProfileRow = {
   university_id: string | number | null
   school: string | null
+  major_id: string | null
+  major?: { id?: string | null; slug?: string | null; name?: string | null } | null
   majors: string[] | string | null
   year: string | null
   coursework: string[] | null
@@ -178,6 +180,7 @@ export default async function AccountPage() {
         {
           user_id: actionUser.id,
           school: 'Not set',
+          major_id: null,
           majors: null,
           year: 'Not set',
           coursework: null,
@@ -265,7 +268,7 @@ export default async function AccountPage() {
     const { data: profile } = await supabase
       .from('student_profiles')
       .select(
-        'university_id, school, majors, year, coursework, experience_level, availability_start_month, availability_hours_per_week, interests, preferred_city, preferred_state, preferred_zip, max_commute_minutes, transport_mode, exact_address_line1, location_lat, location_lng'
+        'university_id, school, major_id, major:canonical_majors(id, slug, name), majors, year, coursework, experience_level, availability_start_month, availability_hours_per_week, interests, preferred_city, preferred_state, preferred_zip, max_commute_minutes, transport_mode, exact_address_line1, location_lat, location_lng'
       )
       .eq('user_id', user.id)
       .maybeSingle()

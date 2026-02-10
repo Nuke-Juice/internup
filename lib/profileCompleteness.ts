@@ -9,6 +9,7 @@ export type MinimumProfileField = (typeof MINIMUM_PROFILE_FIELDS)[number]
 
 export type MinimumProfileInput = {
   school?: string | null
+  major_id?: string | null
   majors?: string[] | string | null
   availability_start_month?: string | null
   availability_hours_per_week?: number | string | null
@@ -61,7 +62,7 @@ export function getMinimumProfileCompleteness(profile: MinimumProfileInput | nul
 
   const checks: Record<MinimumProfileField, boolean> = {
     school: typeof profile.school === 'string' && profile.school.trim().length > 0,
-    major: majors.length > 0,
+    major: (typeof profile.major_id === 'string' && profile.major_id.trim().length > 0) || majors.length > 0,
     availability_start_month:
       typeof profile.availability_start_month === 'string' && profile.availability_start_month.trim().length > 0,
     availability_hours_per_week: hasPositiveHours(profile.availability_hours_per_week),

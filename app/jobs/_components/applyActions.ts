@@ -77,7 +77,7 @@ export async function applyFromMicroOnboardingAction({
     supabase.from('users').select('role').eq('id', user.id).maybeSingle(),
     supabase
       .from('student_profiles')
-      .select('school, majors, year, experience_level, coursework, interests, availability_start_month, availability_hours_per_week')
+      .select('school, major_id, majors, year, experience_level, coursework, interests, availability_start_month, availability_hours_per_week')
       .eq('user_id', user.id)
       .maybeSingle(),
     supabase.from('student_coursework_category_links').select('category_id').eq('student_id', user.id),
