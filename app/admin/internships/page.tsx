@@ -821,51 +821,44 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
   const defaultRecommendedCourseworkCategories = formatList(selectedTemplate?.recommended_coursework_categories)
 
   return (
-    <main className="min-h-screen bg-white px-6 py-10">
-      <section className="mx-auto max-w-7xl space-y-6">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+    <main className="min-h-screen bg-slate-50 px-6 py-8">
+      <section className="mx-auto max-w-7xl space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold text-slate-900">Admin internships</h1>
             <p className="mt-1 text-sm text-slate-600">
               Concierge-post and manage listings with publish/draft workflow.
             </p>
           </div>
-          <Link
-            href="/admin/employers"
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          <a
+            href="#create-internship-form"
+            className="inline-flex h-10 items-center justify-center rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700"
           >
-            Manage employers
-          </Link>
+            New internship
+          </a>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3">
-          <a
-            href="#create-internship"
-            className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-800 shadow-sm hover:border-blue-300 hover:bg-blue-50"
-          >
-            Create internship
-          </a>
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Internships</div>
-            <div className="mt-2">
-              <a
-                href="#manage-internships"
-                className="inline-flex rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Manage internships
-              </a>
-            </div>
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Students</div>
-            <div className="mt-2">
-              <Link
-                href="/admin/students"
-                className="inline-flex rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Manage student profiles
-              </Link>
-            </div>
+        <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <div className="mb-2 text-sm font-medium text-slate-800">Quick actions</div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <a
+              href="#manage-internships"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Manage internships
+            </a>
+            <Link
+              href="/admin/employers"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Manage employers
+            </Link>
+            <Link
+              href="/admin/students"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Manage student profiles
+            </Link>
           </div>
         </div>
 
@@ -880,15 +873,10 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
           </div>
         ) : null}
 
-        <div id="create-internship" className="admin-readable rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">Create internship</h2>
-              <p className="mt-1 text-xs text-slate-500">
-                Pick a template to prefill and publish in under 3 minutes.
-              </p>
-            </div>
-            <form method="get" className="flex items-end gap-2">
+        <div id="create-internship" className="admin-readable rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="mb-2 text-sm font-medium text-slate-800">Template library</div>
+            <form method="get" className="flex flex-wrap items-end gap-2">
               {q ? <input type="hidden" name="q" value={q} /> : null}
               {page > 1 ? <input type="hidden" name="page" value={String(page)} /> : null}
               <input type="hidden" name="toast" value="Template selection updated" />
@@ -896,313 +884,344 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
               <TemplatePicker options={INTERNSHIP_TEMPLATES} selectedTemplateKey={selectedTemplateKey} />
             </form>
           </div>
-          <form action={createInternship} className="mt-4 grid gap-6 lg:grid-cols-2">
-            <div className="space-y-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Basics</h3>
-              <input type="hidden" name="template_used" value={selectedTemplate?.label ?? ''} />
 
-              <div>
-                <label className="text-xs font-medium text-slate-700">Title</label>
-                <input
-                  name="title"
-                  required
-                  defaultValue={selectedTemplate?.title ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                  placeholder="e.g., Data Analyst Intern"
-                />
-              </div>
+          <div className="mt-4">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900">Create internship</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Pick a template to prefill and publish in under 3 minutes.
+              </p>
+            </div>
+          </div>
+          <form id="create-internship-form" action={createInternship} className="mt-3 grid gap-4 lg:grid-cols-12">
+            <input type="hidden" name="template_used" value={selectedTemplate?.label ?? ''} />
+            <div className="space-y-3 lg:col-span-5">
+              <details open className="rounded-xl border border-slate-200 bg-white">
+                <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">Basics</summary>
+                <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Title</label>
+                    <input
+                      name="title"
+                      required
+                      defaultValue={selectedTemplate?.title ?? ''}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      placeholder="e.g., Data Analyst Intern"
+                    />
+                  </div>
 
-              <div>
-                <EmployerSelectWithCreate
-                  employers={employerOptions}
-                  selectedEmployerId={resolvedSearchParams?.new_employer_id ?? ''}
-                  createEmployerAction={createEmployerProfile}
-                  q={q}
-                  page={page}
-                  template={selectedTemplateKey}
-                />
-              </div>
+                  <div>
+                    <EmployerSelectWithCreate
+                      employers={employerOptions}
+                      selectedEmployerId={resolvedSearchParams?.new_employer_id ?? ''}
+                      createEmployerAction={createEmployerProfile}
+                      q={q}
+                      page={page}
+                      template={selectedTemplateKey}
+                    />
+                  </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="text-xs font-medium text-slate-700">Category</label>
-                  <select
-                    name="category"
-                    defaultValue={selectedTemplate?.category ?? ''}
-                    className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                  >
-                    <option value="">Select category</option>
-                    {INTERNSHIP_CATEGORIES.map((category) => (
-                      <option key={category} value={category}>
-                        {category}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Category</label>
+                      <select
+                        name="category"
+                        defaultValue={selectedTemplate?.category ?? ''}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      >
+                        <option value="">Select category</option>
+                        {INTERNSHIP_CATEGORIES.map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Experience</label>
+                      <select
+                        name="experience_level"
+                        defaultValue={selectedTemplate?.experience_level ?? 'entry'}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      >
+                        <option value="entry">entry</option>
+                        <option value="mid">mid</option>
+                        <option value="senior">senior</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Target majors</label>
+                      <input
+                        name="majors"
+                        defaultValue={selectedTemplate?.category ?? ''}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                        placeholder="e.g., Finance, Accounting"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Source</label>
+                      <select
+                        name="source"
+                        defaultValue="concierge"
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      >
+                        <option value="concierge">concierge</option>
+                        <option value="employer_self">employer_self</option>
+                        <option value="partner">partner</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Pay min ($/hr)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        name="pay_min_hourly"
+                        defaultValue={selectedTemplate?.pay_min_hourly ?? undefined}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Pay max ($/hr)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        name="pay_max_hourly"
+                        defaultValue={selectedTemplate?.pay_max_hourly ?? undefined}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Hours/week min</label>
+                      <input
+                        type="number"
+                        name="hours_per_week_min"
+                        defaultValue={selectedTemplate?.hours_per_week_min ?? undefined}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Hours/week max</label>
+                      <input
+                        type="number"
+                        name="hours_per_week_max"
+                        defaultValue={selectedTemplate?.hours_per_week_max ?? undefined}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      />
+                    </div>
+                  </div>
                 </div>
+              </details>
 
-                <div>
-                  <label className="text-xs font-medium text-slate-700">Experience</label>
-                  <select
-                    name="experience_level"
-                    defaultValue={selectedTemplate?.experience_level ?? 'entry'}
-                    className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                  >
-                    <option value="entry">entry</option>
-                    <option value="mid">mid</option>
-                    <option value="senior">senior</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="text-xs font-medium text-slate-700">Target majors (matches student major)</label>
-                  <input
-                    name="majors"
-                    defaultValue={selectedTemplate?.category ?? ''}
-                    className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                    placeholder="e.g., Finance, Accounting"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-700">Source</label>
-                  <select name="source" defaultValue="concierge" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm">
-                    <option value="concierge">concierge</option>
-                    <option value="employer_self">employer_self</option>
-                    <option value="partner">partner</option>
-                  </select>
-                </div>
-                <div className="flex items-end">
-                  <label className="flex items-center gap-2 text-sm text-slate-700">
-                    <input type="checkbox" name="remote_allowed" defaultChecked />
-                    Remote allowed
-                  </label>
-                </div>
-              </div>
-
-              <InternshipLocationFields />
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="text-xs font-medium text-slate-700">Pay min ($/hr)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    name="pay_min_hourly"
-                    defaultValue={selectedTemplate?.pay_min_hourly ?? undefined}
-                    className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-700">Pay max ($/hr)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    name="pay_max_hourly"
-                    defaultValue={selectedTemplate?.pay_max_hourly ?? undefined}
-                    className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                  />
-                </div>
-              </div>
-
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="text-xs font-medium text-slate-700">Hours/week min</label>
-                  <input
-                    type="number"
-                    name="hours_per_week_min"
-                    defaultValue={selectedTemplate?.hours_per_week_min ?? undefined}
-                    className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-700">Hours/week max</label>
-                  <input
-                    type="number"
-                    name="hours_per_week_max"
-                    defaultValue={selectedTemplate?.hours_per_week_max ?? undefined}
-                    className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-slate-700">Start month</label>
-                <select name="start_month" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
-                  <option value="">Select start month</option>
-                  {monthOptions.map((monthOption) => (
-                    <option key={`start-${monthOption}`} value={monthOption}>
-                      {monthOption}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-700">Start year</label>
-                <select name="start_year" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
-                  <option value="">Select start year</option>
-                  {startYearOptions.map((yearOption) => (
-                    <option key={`year-${yearOption}`} value={yearOption}>
-                      {yearOption}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-700">End month</label>
-                <select name="end_month" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
-                  <option value="">Select end month</option>
-                  {monthOptions.map((monthOption) => (
-                    <option key={`end-${monthOption}`} value={monthOption}>
-                      {monthOption}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-medium text-slate-700">End year</label>
-                <select name="end_year" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
-                  <option value="">Select end year</option>
-                  {endYearOptions.map((yearOption) => (
-                    <option key={`end-year-${yearOption}`} value={yearOption}>
-                      {yearOption}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-slate-700">Target graduation year(s)</label>
-                <div className="mt-2 grid grid-cols-3 gap-2 rounded-md border border-slate-200 p-2">
-                  {graduationYearOptions.map((year) => (
-                    <label key={year} className="flex items-center gap-2 text-xs text-slate-700">
-                      <input type="checkbox" name="target_graduation_years" value={year} />
-                      {year}
+              <details className="rounded-xl border border-slate-200 bg-white">
+                <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">Location</summary>
+                <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
+                  <div className="flex items-center">
+                    <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <input type="checkbox" name="remote_allowed" defaultChecked />
+                      Remote allowed
                     </label>
-                  ))}
+                  </div>
+                  <InternshipLocationFields />
                 </div>
-              </div>
+              </details>
+
+              <details className="rounded-xl border border-slate-200 bg-white">
+                <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">Publishing</summary>
+                <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Start month</label>
+                      <select name="start_month" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
+                        <option value="">Select start month</option>
+                        {monthOptions.map((monthOption) => (
+                          <option key={`start-${monthOption}`} value={monthOption}>
+                            {monthOption}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Start year</label>
+                      <select name="start_year" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
+                        <option value="">Select start year</option>
+                        {startYearOptions.map((yearOption) => (
+                          <option key={`year-${yearOption}`} value={yearOption}>
+                            {yearOption}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">End month</label>
+                      <select name="end_month" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
+                        <option value="">Select end month</option>
+                        {monthOptions.map((monthOption) => (
+                          <option key={`end-${monthOption}`} value={monthOption}>
+                            {monthOption}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">End year</label>
+                      <select name="end_year" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
+                        <option value="">Select end year</option>
+                        {endYearOptions.map((yearOption) => (
+                          <option key={`end-year-${yearOption}`} value={yearOption}>
+                            {yearOption}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Target graduation year(s)</label>
+                    <div className="mt-2 grid grid-cols-3 gap-2 rounded-md border border-slate-200 p-2">
+                      {graduationYearOptions.map((year) => (
+                        <label key={year} className="flex items-center gap-2 text-xs text-slate-700">
+                          <input type="checkbox" name="target_graduation_years" value={year} />
+                          {year}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Apply deadline</label>
+                    <input type="date" name="apply_deadline" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Admin notes (private)</label>
+                    <textarea
+                      name="admin_notes"
+                      rows={3}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button
+                      type="submit"
+                      name="create_mode"
+                      value="publish"
+                      className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                    >
+                      Publish active
+                    </button>
+                    <button
+                      type="submit"
+                      name="create_mode"
+                      value="draft"
+                      className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Save draft
+                    </button>
+                  </div>
+                </div>
+              </details>
             </div>
 
-            <div className="space-y-4">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Details</h3>
+            <div className="space-y-3 lg:col-span-7">
+              <details open className="rounded-xl border border-slate-200 bg-white">
+                <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">Details</summary>
+                <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Description</label>
+                    <textarea
+                      name="description"
+                      rows={5}
+                      defaultValue={selectedTemplate?.description ?? ''}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      placeholder="Role overview, team context, impact."
+                    />
+                  </div>
 
-              <div>
-                <label className="text-xs font-medium text-slate-700">Description</label>
-                <textarea
-                  name="description"
-                  rows={5}
-                  defaultValue={selectedTemplate?.description ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                  placeholder="Role overview, team context, impact."
-                />
-              </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Responsibilities (newline or comma separated)</label>
+                    <textarea
+                      name="responsibilities"
+                      rows={4}
+                      defaultValue={defaultResponsibilities}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                    />
+                  </div>
 
-              <div>
-                <label className="text-xs font-medium text-slate-700">Responsibilities (newline or comma separated)</label>
-                <textarea
-                  name="responsibilities"
-                  rows={4}
-                  defaultValue={defaultResponsibilities}
-                  className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                />
-              </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Qualifications (newline or comma separated)</label>
+                    <textarea
+                      name="qualifications"
+                      rows={4}
+                      defaultValue={defaultQualifications}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                    />
+                    <p className="mt-1 text-xs text-slate-500">
+                      Narrative only. Qualifications are not used directly for match scoring.
+                    </p>
+                  </div>
 
-              <div>
-                <label className="text-xs font-medium text-slate-700">Qualifications (newline or comma separated)</label>
-                <textarea
-                  name="qualifications"
-                  rows={4}
-                  defaultValue={defaultQualifications}
-                  className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                />
-                <p className="mt-1 text-xs text-slate-500">
-                  Narrative only. Qualifications are not used directly for match scoring.
-                </p>
-              </div>
+                  <CatalogMultiSelect
+                    label="Required skills"
+                    fieldName="required_skills"
+                    idsFieldName="required_skill_ids"
+                    customFieldName="required_skill_custom"
+                    inputId="required-skills-input"
+                    options={skillCatalog}
+                    initialLabels={parseList(defaultRequiredSkills)}
+                    helperText="Type to search canonical skills. Enter adds custom text if no match."
+                  />
 
-              <CatalogMultiSelect
-                label="Required skills"
-                fieldName="required_skills"
-                idsFieldName="required_skill_ids"
-                customFieldName="required_skill_custom"
-                inputId="required-skills-input"
-                options={skillCatalog}
-                initialLabels={parseList(defaultRequiredSkills)}
-                helperText="Type to search canonical skills. Enter adds custom text if no match."
-              />
+                  <CatalogMultiSelect
+                    label="Preferred skills"
+                    fieldName="preferred_skills"
+                    idsFieldName="preferred_skill_ids"
+                    customFieldName="preferred_skill_custom"
+                    inputId="preferred-skills-input"
+                    options={skillCatalog}
+                    initialLabels={parseList(defaultPreferredSkills)}
+                    helperText="Preferred skills improve ranking but do not hard-filter candidates."
+                  />
 
-              <CatalogMultiSelect
-                label="Preferred skills"
-                fieldName="preferred_skills"
-                idsFieldName="preferred_skill_ids"
-                customFieldName="preferred_skill_custom"
-                inputId="preferred-skills-input"
-                options={skillCatalog}
-                initialLabels={parseList(defaultPreferredSkills)}
-                helperText="Preferred skills improve ranking but do not hard-filter candidates."
-              />
+                  <CatalogMultiSelect
+                    label="Recommended coursework categories"
+                    fieldName="recommended_coursework_categories"
+                    idsFieldName="recommended_coursework_category_ids"
+                    customFieldName="recommended_coursework_category_custom"
+                    inputId="recommended-coursework-category-input"
+                    options={courseworkCategoriesCatalog}
+                    initialLabels={parseList(defaultRecommendedCourseworkCategories)}
+                    helperText="Use categories so students from different schools match."
+                  />
 
-              <CatalogMultiSelect
-                label="Recommended coursework categories"
-                fieldName="recommended_coursework_categories"
-                idsFieldName="recommended_coursework_category_ids"
-                customFieldName="recommended_coursework_category_custom"
-                inputId="recommended-coursework-category-input"
-                options={courseworkCategoriesCatalog}
-                initialLabels={parseList(defaultRecommendedCourseworkCategories)}
-                helperText="Use categories so students from different schools match."
-              />
-
-              <CatalogMultiSelect
-                label="Specific courses (optional)"
-                fieldName="recommended_coursework"
-                idsFieldName="recommended_coursework_ids"
-                customFieldName="recommended_coursework_custom"
-                inputId="recommended-coursework-input"
-                options={courseworkCatalog}
-                initialLabels={[]}
-                helperText="Optional course titles for recruiter context. Categories drive matching."
-              />
-
-              <div>
-                <label className="text-xs font-medium text-slate-700">Apply deadline</label>
-                <input type="date" name="apply_deadline" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" />
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-slate-700">Admin notes (private)</label>
-                <textarea
-                  name="admin_notes"
-                  rows={3}
-                  className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                />
-              </div>
-            </div>
-
-            <div className="lg:col-span-2 flex flex-wrap gap-2">
-              <button
-                type="submit"
-                name="create_mode"
-                value="publish"
-                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-              >
-                Publish active
-              </button>
-              <button
-                type="submit"
-                name="create_mode"
-                value="draft"
-                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Save draft
-              </button>
+                  <CatalogMultiSelect
+                    label="Specific courses (optional)"
+                    fieldName="recommended_coursework"
+                    idsFieldName="recommended_coursework_ids"
+                    customFieldName="recommended_coursework_custom"
+                    inputId="recommended-coursework-input"
+                    options={courseworkCatalog}
+                    initialLabels={[]}
+                    helperText="Optional course titles for recruiter context. Categories drive matching."
+                  />
+                </div>
+              </details>
             </div>
           </form>
         </div>
 
-        <div id="manage-internships" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div id="manage-internships" className="rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <form method="get" className="flex w-full max-w-lg items-end gap-2">
               <div className="w-full">
                 <label className="text-xs font-medium text-slate-700">Search</label>
@@ -1229,7 +1248,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-200 text-sm">
               <thead className="bg-slate-50">
-                <tr className="text-left text-xs uppercase tracking-wide text-slate-600">
+                <tr className="text-left text-xs font-semibold text-slate-600">
                   <th className="px-3 py-2">Title</th>
                   <th className="px-3 py-2">Employer</th>
                   <th className="px-3 py-2">Status</th>
