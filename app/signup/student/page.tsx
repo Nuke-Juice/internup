@@ -7,6 +7,7 @@ import { ArrowLeft } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import TurnstileWidget from '@/components/security/TurnstileWidget'
 import OAuthButtons from '@/components/auth/OAuthButtons'
+import { resolveClientAppOrigin } from '@/lib/url/origin'
 
 const FIELD =
   'mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100'
@@ -33,12 +34,21 @@ export default function StudentSignupPage() {
   const [success, setSuccess] = useState<string | null>(null)
 
   const roleStep2Path = '/signup/student/details'
-  const verifyRequiredPath = `/verify-required?next=${encodeURIComponent(roleStep2Path)}&action=signup_profile_completion`
 
   const queryError = useMemo(() => {
     const value = searchParams.get('error')
     return value ? decodeURIComponent(value) : null
   }, [searchParams])
+  const requestedNextPath = useMemo(() => {
+    const value = searchParams.get('next')
+    if (!value) return null
+    const trimmed = value.trim()
+    if (!trimmed.startsWith('/')) return null
+    if (trimmed.startsWith('//')) return null
+    return trimmed
+  }, [searchParams])
+  const verifyNextPath = requestedNextPath ?? roleStep2Path
+  const verifyRequiredPath = `/verify-required?next=${encodeURIComponent(verifyNextPath)}&action=signup_profile_completion`
 
   async function createAccount() {
     setError(null)
@@ -81,14 +91,14 @@ export default function StudentSignupPage() {
     }
 
     const supabase = supabaseBrowser()
-    const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/+$/, '')
-    const appOrigin = configuredAppUrl || window.location.origin
+    const appOrigin = resolveClientAppOrigin(process.env.NEXT_PUBLIC_APP_URL, window.location.origin)
+    const callbackNextPath = requestedNextPath ?? roleStep2Path
 
     const { data, error: signUpError } = await supabase.auth.signUp({
       email: email.trim(),
       password,
       options: {
-        emailRedirectTo: `${appOrigin}/auth/callback?next=${encodeURIComponent(roleStep2Path)}`,
+        emailRedirectTo: `${appOrigin}/auth/callback?next=${encodeURIComponent(callbackNextPath)}`,
         data: {
           role_hint: 'student',
         },
@@ -133,7 +143,7 @@ export default function StudentSignupPage() {
 
         <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-900">Account</h2>
-          <OAuthButtons roleHint="student" className="mt-4" />
+          <OAuthButtons roleHint="student" nextPath={requestedNextPath ?? undefined} className="mt-4" />
           <div className="mt-4 border-t border-slate-200 pt-4">
             <p className="text-xs text-slate-500">Or continue with email and password.</p>
           </div>

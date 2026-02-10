@@ -3,17 +3,22 @@
 import { headers } from 'next/headers'
 import { supabaseServer } from '@/lib/supabase/server'
 import { resendVerificationEmail, type ResendVerificationResult } from '@/lib/auth/emailVerification'
+import { resolveServerAppOrigin } from '@/lib/url/origin'
 
 async function resolveAppOrigin() {
-  const configured = process.env.NEXT_PUBLIC_APP_URL?.trim()
-  if (configured) return configured.replace(/\/+$/, '')
-
   const headerStore = await headers()
-  const host = headerStore.get('x-forwarded-host') ?? headerStore.get('host')
-  const proto = headerStore.get('x-forwarded-proto') ?? 'http'
-  if (host) return `${proto}://${host}`
+  const origin = resolveServerAppOrigin({
+    configuredPublicAppUrl: process.env.NEXT_PUBLIC_APP_URL,
+    configuredAppUrl: process.env.APP_URL,
+    vercelProductionUrl: process.env.VERCEL_PROJECT_PRODUCTION_URL,
+    vercelUrl: process.env.VERCEL_URL,
+    requestHost: headerStore.get('x-forwarded-host') ?? headerStore.get('host'),
+    requestProto: headerStore.get('x-forwarded-proto') ?? 'https',
+    nodeEnv: process.env.NODE_ENV,
+  })
 
-  return 'http://localhost:3000'
+  if (origin) return origin
+  throw new Error('Could not resolve app origin for verification email redirect')
 }
 
 function normalizeNext(nextUrl: string) {

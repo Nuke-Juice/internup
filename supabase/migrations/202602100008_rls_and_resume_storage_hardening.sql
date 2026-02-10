@@ -240,7 +240,8 @@ insert into storage.buckets (id, name, public)
 values ('resumes', 'resumes', false)
 on conflict (id) do update set public = excluded.public;
 
-alter table storage.objects enable row level security;
+-- `storage.objects` is managed by Supabase Storage and already RLS-protected.
+-- Avoid altering table-level ownership-managed settings in migrations.
 
 drop policy if exists resumes_select_access on storage.objects;
 create policy resumes_select_access

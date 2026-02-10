@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
+import { resolveClientAppOrigin } from '@/lib/url/origin'
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('')
@@ -22,8 +23,7 @@ export default function ForgotPasswordPage() {
 
     setLoading(true)
     const supabase = supabaseBrowser()
-    const configuredAppUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/+$/, '')
-    const appOrigin = configuredAppUrl || window.location.origin
+    const appOrigin = resolveClientAppOrigin(process.env.NEXT_PUBLIC_APP_URL, window.location.origin)
 
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: `${appOrigin}/reset-password`,
