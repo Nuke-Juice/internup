@@ -20,14 +20,18 @@ type TurnstileWidgetProps = {
   action?: string
   className?: string
   fieldName?: string
+  appearance?: 'always' | 'interaction-only' | 'execute'
   onTokenChange?: (token: string) => void
+  onError?: (message: string) => void
 }
 
 export default function TurnstileWidget({
   action,
   className,
   fieldName = 'turnstile_token',
+  appearance = 'interaction-only',
   onTokenChange,
+  onError,
 }: TurnstileWidgetProps) {
   const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ?? ''
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -36,12 +40,17 @@ export default function TurnstileWidget({
   const [token, setToken] = useState('')
 
   useEffect(() => {
+    if (siteKey) return
+    onError?.('Turnstile site key is missing.')
+  }, [onError, siteKey])
+
+  useEffect(() => {
     if (!scriptReady || !siteKey || !containerRef.current || !window.turnstile || widgetIdRef.current) return
 
     widgetIdRef.current = window.turnstile.render(containerRef.current, {
       sitekey: siteKey,
       action,
-      appearance: 'interaction-only',
+      appearance,
       callback: (value: string) => {
         setToken(value)
         onTokenChange?.(value)
@@ -53,6 +62,7 @@ export default function TurnstileWidget({
       'error-callback': () => {
         setToken('')
         onTokenChange?.('')
+        onError?.('Turnstile verification could not be completed.')
       },
     })
 
@@ -62,7 +72,7 @@ export default function TurnstileWidget({
         widgetIdRef.current = null
       }
     }
-  }, [action, onTokenChange, scriptReady, siteKey])
+  }, [action, appearance, onError, onTokenChange, scriptReady, siteKey])
 
   return (
     <div className={className}>
@@ -70,6 +80,7 @@ export default function TurnstileWidget({
         src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
         strategy="afterInteractive"
         onLoad={() => setScriptReady(true)}
+        onError={() => onError?.('Turnstile script failed to load.')}
       />
       <div ref={containerRef} />
       <input type="hidden" name={fieldName} value={token} />

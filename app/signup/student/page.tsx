@@ -1,19 +1,70 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import TurnstileWidget from '@/components/security/TurnstileWidget'
 import MajorCombobox, { type CanonicalMajor } from '@/components/account/MajorCombobox'
 
-const COURSEWORK = [
+const SCHOOL_OPTIONS = [
+  'University of Utah',
+  'Utah State University',
+  'Brigham Young University',
+  'Weber State University',
+  'Salt Lake Community College',
+  'Westminster University',
+  'Utah Valley University',
+  'Southern Utah University',
+  'University of Southern California',
+  'University of California, Los Angeles',
+  'University of California, Berkeley',
+  'Stanford University',
+  'Arizona State University',
+  'University of Arizona',
+  'University of Washington',
+  'Oregon State University',
+  'University of Colorado Boulder',
+  'University of Texas at Austin',
+  'Texas A&M University',
+  'University of Michigan',
+  'University of Illinois Urbana-Champaign',
+  'New York University',
+  'University of Florida',
+  'University of North Carolina at Chapel Hill',
+]
+
+const COURSEWORK_CATALOG = [
   'Accounting 101',
-  'Finance 201',
+  'Financial Accounting',
+  'Managerial Accounting',
+  'Corporate Finance',
+  'Investments',
+  'Financial Modeling',
   'Intro to CS',
+  'Object-Oriented Programming',
   'Data Structures',
+  'Algorithms',
+  'Database Systems',
+  'Operating Systems',
+  'Computer Networks',
+  'Machine Learning',
+  'Data Science',
   'Statistics',
+  'Probability',
+  'Linear Algebra',
+  'Calculus I',
+  'Calculus II',
+  'Economics',
+  'Microeconomics',
+  'Macroeconomics',
   'Marketing',
+  'Consumer Behavior',
+  'Operations Management',
+  'Business Analytics',
+  'Product Management',
+  'Technical Writing',
+  'Business Communication',
 ]
 
 const FIELD =
@@ -23,8 +74,10 @@ export default function StudentSignupPage() {
   const friendlyCaptchaError = 'Please verify you’re human and try again.'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [turnstileToken, setTurnstileToken] = useState('')
   const [turnstileKey, setTurnstileKey] = useState(0)
+  const [turnstileLoadError, setTurnstileLoadError] = useState<string | null>(null)
 
   const [school, setSchool] = useState('University of Utah')
   const [year, setYear] = useState('Freshman')
@@ -35,6 +88,7 @@ export default function StudentSignupPage() {
   const [majorsLoading, setMajorsLoading] = useState(true)
   const [majorError, setMajorError] = useState<string | null>(null)
   const [coursework, setCoursework] = useState<string[]>([])
+  const [courseworkInput, setCourseworkInput] = useState('')
   const experience: 'none' | 'projects' | 'internship' = 'none'
   const startMonth = 'May'
   const hoursPerWeek = '15'
@@ -43,8 +97,15 @@ export default function StudentSignupPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  function toggleCourse(c: string) {
-    setCoursework((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]))
+  function addCoursework(course: string) {
+    const normalized = course.trim().replace(/\s+/g, ' ')
+    if (!normalized) return
+    setCoursework((prev) => (prev.includes(normalized) ? prev : [...prev, normalized]))
+    setCourseworkInput('')
+  }
+
+  function removeCoursework(course: string) {
+    setCoursework((prev) => prev.filter((item) => item !== course))
   }
 
   useEffect(() => {
@@ -78,9 +139,18 @@ export default function StudentSignupPage() {
     void loadMajorCatalog()
   }, [])
 
+  const filteredCourseworkOptions = useMemo(() => {
+    const query = courseworkInput.trim().toLowerCase()
+    const available = COURSEWORK_CATALOG.filter((item) => !coursework.includes(item))
+    if (!query) return available.slice(0, 8)
+    return available.filter((item) => item.toLowerCase().includes(query)).slice(0, 8)
+  }, [coursework, courseworkInput])
+
   async function createAccount() {
     setError(null)
     if (!email || !password) return setError('Email and password are required.')
+    if (password.length < 8) return setError('Password must be at least 8 characters.')
+    if (password !== confirmPassword) return setError('Passwords do not match.')
     if (!selectedMajor) return setError('Please select a verified major.')
     if (!turnstileToken) return setError(friendlyCaptchaError)
 
@@ -182,6 +252,16 @@ export default function StudentSignupPage() {
               <label className="text-sm font-medium text-slate-700">Password</label>
               <input type="password" className={FIELD} value={password} onChange={(e) => setPassword(e.target.value)} />
             </div>
+
+            <div>
+              <label className="text-sm font-medium text-slate-700">Confirm password</label>
+              <input
+                type="password"
+                className={FIELD}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+              />
+            </div>
           </div>
 
           <div className="mt-8 border-t border-slate-200 pt-6">
@@ -191,8 +271,11 @@ export default function StudentSignupPage() {
               <div>
                 <label className="text-sm font-medium text-slate-700">School</label>
                 <select className={FIELD} value={school} onChange={(e) => setSchool(e.target.value)}>
-                  <option>University of Utah</option>
-                  <option>Other</option>
+                  {SCHOOL_OPTIONS.map((schoolOption) => (
+                    <option key={schoolOption} value={schoolOption}>
+                      {schoolOption}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -244,24 +327,82 @@ export default function StudentSignupPage() {
 
               <div className="sm:col-span-2">
                 <label className="text-sm font-medium text-slate-700">Coursework</label>
-                <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                  {COURSEWORK.map((c) => (
-                    <label key={c} className="flex items-center gap-2 rounded-md border p-2 text-sm text-slate-700">
-                      <input type="checkbox" className="accent-blue-600" checked={coursework.includes(c)} onChange={() => toggleCourse(c)} />
-                      {c}
-                    </label>
-                  ))}
+                <div className="mt-2 rounded-md border border-slate-300 p-2">
+                  <div className="flex gap-2">
+                    <input
+                      className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
+                      value={courseworkInput}
+                      onChange={(e) => setCourseworkInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          const first = filteredCourseworkOptions[0]
+                          if (first) addCoursework(first)
+                        }
+                      }}
+                      placeholder="Search coursework and press Enter to add"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const first = filteredCourseworkOptions[0]
+                        if (first) addCoursework(first)
+                      }}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  <div className="mt-2 max-h-40 overflow-auto rounded-md border border-slate-200">
+                    {filteredCourseworkOptions.length === 0 ? (
+                      <p className="px-3 py-2 text-sm text-slate-500">No results found.</p>
+                    ) : (
+                      filteredCourseworkOptions.map((course) => (
+                        <button
+                          key={course}
+                          type="button"
+                          onClick={() => addCoursework(course)}
+                          className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                        >
+                          {course}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  {coursework.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {coursework.map((course) => (
+                        <button
+                          key={course}
+                          type="button"
+                          onClick={() => removeCoursework(course)}
+                          className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
+                        >
+                          {course} ×
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
 
+            {turnstileLoadError ? <p className="mt-4 text-sm text-red-600">{turnstileLoadError}</p> : null}
             {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
 
             <TurnstileWidget
               key={turnstileKey}
               action="student_signup"
               className="mt-4"
+              appearance="always"
               onTokenChange={setTurnstileToken}
+              onError={(message) => {
+                if (window.location.hostname === 'localhost') {
+                  setTurnstileLoadError('Turnstile blocked on localhost host config. Test on deployed domain or add localhost hostname in Turnstile.')
+                  return
+                }
+                setTurnstileLoadError(message)
+              }}
             />
 
             <button
