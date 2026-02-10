@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
+import { ArrowLeft } from 'lucide-react'
 import { requireAnyRole } from '@/lib/auth/requireAnyRole'
 import { ADMIN_ROLES } from '@/lib/auth/roles'
 import { INTERNSHIP_CATEGORIES, type InternshipCategory } from '@/lib/admin/internshipTemplates'
@@ -615,14 +616,15 @@ export default async function AdminInternshipEditPage({
   return (
     <main className="min-h-screen bg-white px-6 py-10">
       <section className="mx-auto max-w-5xl space-y-4">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold text-slate-900">Edit internship</h1>
+        <div>
           <Link
             href="/admin/internships"
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            aria-label="Go back"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
           >
-            Back
+            <ArrowLeft className="h-5 w-5" />
           </Link>
+          <h1 className="mt-2 text-2xl font-semibold text-slate-900">Edit internship</h1>
         </div>
 
         {resolvedSearchParams?.error ? (

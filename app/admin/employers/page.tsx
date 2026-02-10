@@ -1,7 +1,9 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
+import { ArrowLeft } from 'lucide-react'
 import { ADMIN_ROLES } from '@/lib/auth/roles'
 import { requireAnyRole } from '@/lib/auth/requireAnyRole'
+import { deleteUserAccountById } from '@/lib/auth/accountDeletion'
 import {
   buildEmployerClaimStatus,
   sendEmployerClaimLink,
@@ -14,6 +16,7 @@ type SearchParams = Promise<{
   sent?: string
   resent?: string
   contactSaved?: string
+  deleted?: string
   error?: string
 }>
 
@@ -192,20 +195,43 @@ export default async function AdminEmployersPage({ searchParams }: { searchParam
     )
   }
 
+  async function deleteEmployerAccountAction(formData: FormData) {
+    'use server'
+
+    await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/employers' })
+    const employerId = String(formData.get('employer_id') ?? '').trim()
+    const qValue = String(formData.get('q') ?? '').trim()
+
+    if (!employerId) {
+      redirect(`/admin/employers${encodeParams({ q: qValue, error: 'Missing employer context' })}`)
+    }
+
+    const adminWrite = supabaseAdmin()
+    const result = await deleteUserAccountById(adminWrite, employerId)
+    if (!result.ok) {
+      redirect(`/admin/employers${encodeParams({ q: qValue, error: result.error })}`)
+    }
+
+    const next = encodeParams({ q: qValue })
+    const joiner = next ? '&' : '?'
+    redirect(`/admin/employers${next}${joiner}deleted=1`)
+  }
+
   return (
     <main className="min-h-screen bg-white px-6 py-10">
       <section className="mx-auto max-w-7xl space-y-6">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-slate-900">Admin employers</h1>
-            <p className="mt-1 text-sm text-slate-600">Manage employer contact emails and claim access links.</p>
-          </div>
+        <div>
           <Link
             href="/admin/internships"
-            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            aria-label="Go back"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
           >
-            Back to internships
+            <ArrowLeft className="h-5 w-5" />
           </Link>
+          <div>
+            <h1 className="mt-2 text-2xl font-semibold text-slate-900">Admin employers</h1>
+            <p className="mt-1 text-sm text-slate-600">Manage employer contact emails and claim access links.</p>
+          </div>
         </div>
 
         {resolvedSearchParams?.error ? (
@@ -213,6 +239,9 @@ export default async function AdminEmployersPage({ searchParams }: { searchParam
         ) : null}
         {resolvedSearchParams?.contactSaved ? (
           <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">Employer contact saved.</div>
+        ) : null}
+        {resolvedSearchParams?.deleted ? (
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">Employer account deleted.</div>
         ) : null}
         {resolvedSearchParams?.sent ? (
           <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">Claim link sent and logged.</div>
@@ -327,6 +356,16 @@ export default async function AdminEmployersPage({ searchParams }: { searchParam
                                 View applicants
                               </Link>
                             ) : null}
+                            <form action={deleteEmployerAccountAction}>
+                              <input type="hidden" name="employer_id" value={employer.user_id} />
+                              <input type="hidden" name="q" value={resolvedSearchParams?.q ?? ''} />
+                              <button
+                                type="submit"
+                                className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-100"
+                              >
+                                Delete account
+                              </button>
+                            </form>
                           </div>
                         </td>
                       </tr>

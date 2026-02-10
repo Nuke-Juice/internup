@@ -11,9 +11,10 @@ type TemplateOption = {
 type Props = {
   options: readonly TemplateOption[]
   selectedTemplateKey: string
+  showLabel?: boolean
 }
 
-export default function TemplatePicker({ options, selectedTemplateKey }: Props) {
+export default function TemplatePicker({ options, selectedTemplateKey, showLabel = true }: Props) {
   const selectedTemplate = useMemo(
     () => options.find((template) => template.key === selectedTemplateKey) ?? null,
     [options, selectedTemplateKey]
@@ -45,9 +46,11 @@ export default function TemplatePicker({ options, selectedTemplateKey }: Props) 
 
   return (
     <div className="flex items-end gap-2">
-      <label className="shrink-0 text-xs font-medium text-slate-700" htmlFor="template-picker-search">
-        Template library
-      </label>
+      {showLabel ? (
+        <label className="shrink-0 text-xs font-medium text-slate-700" htmlFor="template-picker-search">
+          Template library
+        </label>
+      ) : null}
       <div className="relative min-w-[22rem]">
         <input
           id="template-picker-search"

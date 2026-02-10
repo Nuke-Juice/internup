@@ -65,6 +65,12 @@ export default async function ProfilePage() {
 
           <div className="mt-6 flex flex-wrap items-center gap-2">
             <Link
+              href="/admin"
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Go to dashboard
+            </Link>
+            <Link
               href="/admin/internships"
               className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
             >

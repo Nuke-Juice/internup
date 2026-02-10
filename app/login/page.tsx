@@ -96,6 +96,11 @@ export default async function LoginPage({
               placeholder="********"
               required
             />
+            <div className="mt-1 text-right">
+              <Link href="/forgot-password" className="text-xs font-medium text-blue-700 hover:underline">
+                Forgot password?
+              </Link>
+            </div>
           </div>
 
           {resolvedSearchParams.error && (

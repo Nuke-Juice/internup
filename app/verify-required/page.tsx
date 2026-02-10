@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
+import { ArrowLeft } from 'lucide-react'
 import VerifyRequiredPanel from './_components/VerifyRequiredPanel'
 import { supabaseServer } from '@/lib/supabase/server'
 import { resendVerificationEmailAction } from '@/lib/auth/emailVerificationServer'
@@ -52,17 +53,19 @@ export default async function VerifyRequiredPage({ searchParams }: { searchParam
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-12">
       <section className="mx-auto max-w-2xl space-y-4">
+        <Link
+          href={nextUrl}
+          aria-label="Go back"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </Link>
         <VerifyRequiredPanel
           email={user.email ?? ''}
           nextUrl={nextUrl}
           actionName={actionName}
           resendAction={resendAction}
         />
-        <div className="text-sm text-slate-600">
-          <Link href={nextUrl} className="font-medium text-blue-700 hover:underline">
-            Back
-          </Link>
-        </div>
       </section>
     </main>
   )

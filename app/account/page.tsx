@@ -143,7 +143,7 @@ export default async function AccountPage() {
         route: '/account',
       })
     }
-    redirect('/admin/internships')
+    redirect('/admin')
   }
 
   async function chooseRole(formData: FormData) {
@@ -178,7 +178,7 @@ export default async function AccountPage() {
           finalRole,
         })
       }
-      redirect('/admin/internships')
+      redirect('/admin')
     }
 
     if (finalRole === 'student') {
@@ -286,6 +286,14 @@ export default async function AccountPage() {
     return (
       <main className="min-h-screen bg-slate-50 px-6 py-10">
         <div className="mx-auto max-w-5xl">
+          <div className="mb-4 flex justify-end">
+            <Link
+              href="/account/security"
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Security settings
+            </Link>
+          </div>
           <StudentAccount userId={user.id} initialProfile={(profile ?? null) as StudentProfileRow | null} />
         </div>
       </main>
@@ -397,6 +405,14 @@ export default async function AccountPage() {
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-6xl">
+        <div className="mb-4 flex justify-end">
+          <Link
+            href="/account/security"
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Security settings
+          </Link>
+        </div>
         <EmployerAccount
           userId={user.id}
           userEmail={user.email ?? null}

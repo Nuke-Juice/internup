@@ -21,9 +21,9 @@ import { normalizeSkills } from '@/lib/skills/normalizeSkills'
 import { sanitizeSkillLabels } from '@/lib/skills/sanitizeSkillLabels'
 import { requireVerifiedEmail } from '@/lib/auth/emailVerification'
 import InternshipLocationFields from '@/components/forms/InternshipLocationFields'
-import CatalogMultiSelect from './_components/CatalogMultiSelect'
-import TemplatePicker from './_components/TemplatePicker'
-import EmployerSelectWithCreate from './_components/EmployerSelectWithCreate'
+import CatalogMultiSelect from '../_components/CatalogMultiSelect'
+import TemplatePicker from '../_components/TemplatePicker'
+import EmployerSelectWithCreate from '../_components/EmployerSelectWithCreate'
 
 const PAGE_SIZE = 20
 
@@ -122,7 +122,7 @@ function buildPageHref(params: { q?: string; page: number; template?: string }) 
   if (params.page > 1) search.set('page', String(params.page))
   if (params.template) search.set('template', params.template)
   const query = search.toString()
-  return query ? `/admin/internships?${query}` : '/admin/internships'
+  return query ? `/admin/internships/new?${query}` : '/admin/internships/new'
 }
 
 function toSyntheticEmployerEmail(companyName: string) {
@@ -194,7 +194,7 @@ function parseFormStringArray(formData: FormData, key: string) {
 }
 
 export default async function AdminInternshipsPage({ searchParams }: { searchParams?: SearchParams }) {
-  await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/internships' })
+  await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/internships/new' })
   const resolvedSearchParams = searchParams ? await searchParams : undefined
 
   if (!hasSupabaseAdminCredentials()) {
@@ -346,7 +346,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
   async function createInternship(formData: FormData) {
     'use server'
 
-    const { user, role } = await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/internships' })
+    const { user, role } = await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/internships/new' })
     const adminWrite = supabaseAdmin()
 
     const createMode = String(formData.get('create_mode') ?? 'publish')
@@ -406,13 +406,13 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
         })
 
     if (publishError) {
-      redirect(`/admin/internships?error=${encodeURIComponent(publishError)}`)
+      redirect(`/admin/internships/new?error=${encodeURIComponent(publishError)}`)
     }
 
     if (!isDraft) {
       const verificationGate = requireVerifiedEmail({
         user,
-        nextUrl: '/admin/internships',
+        nextUrl: '/admin/internships/new',
         actionName: 'admin_internship_publish',
       })
       if (!verificationGate.ok) {
@@ -427,7 +427,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       .maybeSingle()
 
     if (!employerProfile?.user_id) {
-      redirect('/admin/internships?error=Employer+profile+not+found')
+      redirect('/admin/internships/new?error=Employer+profile+not+found')
     }
 
     const location = buildLocation(locationCity, locationState, remoteAllowed)
@@ -655,7 +655,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       .single()
 
     if (error) {
-      redirect(`/admin/internships?error=${encodeURIComponent(error.message)}`)
+      redirect(`/admin/internships/new?error=${encodeURIComponent(error.message)}`)
     }
 
     if (insertedInternship?.id) {
@@ -667,7 +667,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
           }))
         )
         if (requiredInsertError) {
-          redirect(`/admin/internships?error=${encodeURIComponent(requiredInsertError.message)}`)
+          redirect(`/admin/internships/new?error=${encodeURIComponent(requiredInsertError.message)}`)
         }
       }
       if (canonicalPreferredSkillIds.length > 0) {
@@ -678,7 +678,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
           }))
         )
         if (preferredInsertError) {
-          redirect(`/admin/internships?error=${encodeURIComponent(preferredInsertError.message)}`)
+          redirect(`/admin/internships/new?error=${encodeURIComponent(preferredInsertError.message)}`)
         }
       }
       if (canonicalCourseworkIds.length > 0) {
@@ -689,7 +689,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
           }))
         )
         if (courseworkInsertError) {
-          redirect(`/admin/internships?error=${encodeURIComponent(courseworkInsertError.message)}`)
+          redirect(`/admin/internships/new?error=${encodeURIComponent(courseworkInsertError.message)}`)
         }
       }
       if (canonicalCourseworkCategoryIds.length > 0) {
@@ -702,7 +702,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
             }))
           )
         if (courseworkCategoryInsertError) {
-          redirect(`/admin/internships?error=${encodeURIComponent(courseworkCategoryInsertError.message)}`)
+          redirect(`/admin/internships/new?error=${encodeURIComponent(courseworkCategoryInsertError.message)}`)
         }
       }
     }
@@ -713,7 +713,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
   async function createEmployerProfile(formData: FormData) {
     'use server'
 
-    await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/internships' })
+    await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/internships/new' })
     const adminWrite = supabaseAdmin()
 
     const companyName = String(formData.get('company_name') ?? '').trim()
@@ -784,7 +784,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
   async function toggleActive(formData: FormData) {
     'use server'
 
-    await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/internships' })
+    await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/internships/new' })
     const adminWrite = supabaseAdmin()
 
     const internshipId = String(formData.get('internship_id') ?? '').trim()
@@ -794,7 +794,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
     const templateValue = String(formData.get('template') ?? '').trim()
 
     if (!internshipId) {
-      redirect('/admin/internships?error=Missing+internship+id')
+      redirect('/admin/internships/new?error=Missing+internship+id')
     }
 
     const { error } = await adminWrite
@@ -803,7 +803,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       .eq('id', internshipId)
 
     if (error) {
-      redirect(`/admin/internships?error=${encodeURIComponent(error.message)}`)
+      redirect(`/admin/internships/new?error=${encodeURIComponent(error.message)}`)
     }
 
     const href = buildPageHref({
@@ -825,16 +825,16 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       <section className="mx-auto max-w-7xl space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-slate-900">Manage internships</h1>
+            <h1 className="text-2xl font-semibold text-slate-900">Create internship</h1>
             <p className="mt-1 text-sm text-slate-600">
-              Review listings, status, and match signal coverage.
+              Use templates, validate details, then publish or save as draft.
             </p>
           </div>
           <Link
-            href="/admin/internships/new"
-            className="inline-flex h-10 items-center justify-center rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700"
+            href="/admin/internships"
+            className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
-            New internship
+            Manage internships
           </Link>
         </div>
 
@@ -873,201 +873,353 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
           </div>
         ) : null}
 
-        <div id="manage-internships" className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <form method="get" className="flex w-full max-w-lg items-end gap-2">
-              <div className="w-full">
-                <label className="text-xs font-medium text-slate-700">Search</label>
-                <input
-                  name="q"
-                  defaultValue={q}
-                  className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
-                  placeholder="Search title or employer"
-                />
-              </div>
-              {selectedTemplateKey ? <input type="hidden" name="template" value={selectedTemplateKey} /> : null}
-              <button
-                type="submit"
-                className="h-10 rounded-md border border-slate-300 bg-white px-4 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Search
-              </button>
+        <div id="create-internship" className="admin-readable rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="mb-2 text-sm font-medium text-slate-800">Template library</div>
+            <form method="get" className="flex w-full items-center gap-2">
+              {q ? <input type="hidden" name="q" value={q} /> : null}
+              {page > 1 ? <input type="hidden" name="page" value={String(page)} /> : null}
+              <input type="hidden" name="toast" value="Template selection updated" />
+              <input type="hidden" name="toast_type" value="success" />
+              <TemplatePicker options={INTERNSHIP_TEMPLATES} selectedTemplateKey={selectedTemplateKey} showLabel={false} />
             </form>
-            <div className="text-xs text-slate-500">
-              Page {page} of {totalPages} · {total} total
-            </div>
           </div>
 
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200 text-sm">
-              <thead className="bg-slate-50">
-                <tr className="text-left text-xs font-semibold text-slate-600">
-                  <th className="px-3 py-2">Title</th>
-                  <th className="px-3 py-2">Employer</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Source</th>
-                  <th className="px-3 py-2">Verification status</th>
-                  <th className="px-3 py-2">Match signals</th>
-                  <th className="px-3 py-2">Applicants count</th>
-                  <th className="px-3 py-2">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {internships.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-3 py-8 text-center text-sm text-slate-500">
-                      No internships found.
-                    </td>
-                  </tr>
-                ) : (
-                  internships.map((row) => {
-                    const employerName = companyByEmployerId.get(row.employer_id) ?? row.company_name ?? 'Unknown employer'
-                    const status = row.is_active ? 'active' : 'inactive'
-                    const source = normalizeSource(row.source ?? undefined)
-                    const verification = verificationByEmployerId.get(row.employer_id) ?? 'unverified'
-                    const applicantsCount = applicantsCountByInternshipId.get(row.id) ?? 0
-                    const requiredSkillLinks = requiredSkillLinksByInternshipId.get(row.id) ?? 0
-                    const preferredSkillLinks = preferredSkillLinksByInternshipId.get(row.id) ?? 0
-                    const requiredSkillsCount = row.required_skills?.length ?? 0
-                    const preferredSkillsCount = row.preferred_skills?.length ?? 0
-                    const courseworkCount = row.recommended_coursework?.length ?? 0
-                    const majorsPresent = Array.isArray(row.majors)
-                      ? row.majors.length > 0
-                      : typeof row.majors === 'string'
-                        ? row.majors.trim().length > 0
-                        : false
-                    const targetGraduationYearsPresent = Array.isArray(row.target_graduation_years)
-                      ? row.target_graduation_years.length > 0
-                      : false
-                    const experiencePresent = Boolean(row.experience_level?.trim())
-                    const termPresent = Boolean(row.term?.trim())
-                    const hoursPresent = typeof row.hours_per_week === 'number' && row.hours_per_week > 0
-                    const locationOrRemotePresent =
-                      Boolean(row.remote_allowed) || Boolean(row.location_city?.trim() || row.location_state?.trim())
-                    const coverageChecks = [
-                      ['majors', majorsPresent] as const,
-                      ['target_graduation_years', targetGraduationYearsPresent] as const,
-                      ['experience_level', experiencePresent] as const,
-                      ['term', termPresent] as const,
-                      ['hours_per_week', hoursPresent] as const,
-                      ['location/remote', locationOrRemotePresent] as const,
-                    ]
-                    const coverageMet = coverageChecks.filter(([, present]) => present).length
-                    const missingCoverageFields = coverageChecks
-                      .filter(([, present]) => !present)
-                      .map(([field]) => field)
-                    const coverageTooltip =
-                      missingCoverageFields.length > 0
-                        ? `Missing: ${missingCoverageFields.join(', ')}`
-                        : 'All key matching fields present'
-
-                    return (
-                      <tr key={row.id}>
-                        <td className="px-3 py-3 text-slate-900">
-                          <div className="font-medium">{row.title || 'Untitled'}</div>
-                          <div className="text-xs text-slate-500">
-                            {row.category || 'Uncategorized'} · {row.experience_level || 'n/a'} · {formatDate(row.apply_deadline)}
-                          </div>
-                        </td>
-                        <td className="px-3 py-3 text-slate-700">{employerName}</td>
-                        <td className="px-3 py-3">
-                          <span className="rounded-full border border-slate-300 px-2 py-1 text-xs">{status}</span>
-                        </td>
-                        <td className="px-3 py-3 text-slate-700">{source}</td>
-                        <td className="px-3 py-3">
-                          <span className="rounded-full border border-slate-300 px-2 py-1 text-xs">{verification}</span>
-                        </td>
-                        <td className="px-3 py-3 text-xs text-slate-700">
-                          <div>Skills: {requiredSkillsCount} required, {preferredSkillsCount} preferred</div>
-                          <div>Verified skill links: {requiredSkillLinks + preferredSkillLinks}</div>
-                          <div>Recommended coursework: {courseworkCount}</div>
-                          <div className="mt-1">
-                            <span
-                              title={coverageTooltip}
-                              className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-                                coverageMet === 6
-                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
-                                  : 'border-amber-300 bg-amber-50 text-amber-700'
-                              }`}
-                            >
-                              Coverage: {coverageMet}/6
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-3 py-3">
-                          <Link
-                            href={`/admin/internships/${row.id}/applicants`}
-                            className="text-sm font-medium text-blue-700 hover:underline"
-                          >
-                            {applicantsCount}
-                          </Link>
-                        </td>
-                        <td className="px-3 py-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Link
-                              href={`/admin/internships/${row.id}`}
-                              className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                            >
-                              Edit
-                            </Link>
-                            <form action={toggleActive}>
-                              <input type="hidden" name="internship_id" value={row.id} />
-                              <input type="hidden" name="q" value={q} />
-                              <input type="hidden" name="page" value={String(page)} />
-                              <input type="hidden" name="template" value={selectedTemplateKey} />
-                              <input type="hidden" name="next_active" value={row.is_active ? 'false' : 'true'} />
-                              <button
-                                type="submit"
-                                className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                              >
-                                {row.is_active ? 'Deactivate' : 'Activate'}
-                              </button>
-                            </form>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="mt-4 flex items-center justify-between">
+          <div className="mt-4">
             <div>
-              {hasPrev ? (
-                <Link
-                  href={buildPageHref({
-                    q: q || undefined,
-                    page: page - 1,
-                    template: selectedTemplateKey || undefined,
-                  })}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-                >
-                  Previous
-                </Link>
-              ) : (
-                <span className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-400">Previous</span>
-              )}
-            </div>
-            <div>
-              {hasNext ? (
-                <Link
-                  href={buildPageHref({
-                    q: q || undefined,
-                    page: page + 1,
-                    template: selectedTemplateKey || undefined,
-                  })}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-                >
-                  Next
-                </Link>
-              ) : (
-                <span className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-400">Next</span>
-              )}
+              <h2 className="text-base font-semibold text-slate-900">Create internship</h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Pick a template to prefill and publish in under 3 minutes.
+              </p>
             </div>
           </div>
+          <form id="create-internship-form" action={createInternship} className="mt-3 grid gap-4 lg:grid-cols-12">
+            <input type="hidden" name="template_used" value={selectedTemplate?.label ?? ''} />
+            <div className="space-y-3 lg:col-span-5">
+              <details open className="rounded-xl border border-slate-200 bg-white">
+                <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">Basics</summary>
+                <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Title</label>
+                    <input
+                      name="title"
+                      required
+                      defaultValue={selectedTemplate?.title ?? ''}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      placeholder="e.g., Data Analyst Intern"
+                    />
+                  </div>
+
+                  <div>
+                    <EmployerSelectWithCreate
+                      employers={employerOptions}
+                      selectedEmployerId={resolvedSearchParams?.new_employer_id ?? ''}
+                      createEmployerAction={createEmployerProfile}
+                      q={q}
+                      page={page}
+                      template={selectedTemplateKey}
+                    />
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Category</label>
+                      <select
+                        name="category"
+                        defaultValue={selectedTemplate?.category ?? ''}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      >
+                        <option value="">Select category</option>
+                        {INTERNSHIP_CATEGORIES.map((category) => (
+                          <option key={category} value={category}>
+                            {category}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Experience</label>
+                      <select
+                        name="experience_level"
+                        defaultValue={selectedTemplate?.experience_level ?? 'entry'}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      >
+                        <option value="entry">entry</option>
+                        <option value="mid">mid</option>
+                        <option value="senior">senior</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Target majors</label>
+                      <input
+                        name="majors"
+                        defaultValue={selectedTemplate?.category ?? ''}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                        placeholder="e.g., Finance, Accounting"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Source</label>
+                      <select
+                        name="source"
+                        defaultValue="concierge"
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      >
+                        <option value="concierge">concierge</option>
+                        <option value="employer_self">employer_self</option>
+                        <option value="partner">partner</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Pay min ($/hr)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        name="pay_min_hourly"
+                        defaultValue={selectedTemplate?.pay_min_hourly ?? undefined}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Pay max ($/hr)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        name="pay_max_hourly"
+                        defaultValue={selectedTemplate?.pay_max_hourly ?? undefined}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Hours/week min</label>
+                      <input
+                        type="number"
+                        name="hours_per_week_min"
+                        defaultValue={selectedTemplate?.hours_per_week_min ?? undefined}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Hours/week max</label>
+                      <input
+                        type="number"
+                        name="hours_per_week_max"
+                        defaultValue={selectedTemplate?.hours_per_week_max ?? undefined}
+                        className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </details>
+
+              <details className="rounded-xl border border-slate-200 bg-white">
+                <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">Location</summary>
+                <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
+                  <div className="flex items-center">
+                    <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <input type="checkbox" name="remote_allowed" defaultChecked />
+                      Remote allowed
+                    </label>
+                  </div>
+                  <InternshipLocationFields />
+                </div>
+              </details>
+
+              <details className="rounded-xl border border-slate-200 bg-white">
+                <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">Publishing</summary>
+                <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Start month</label>
+                      <select name="start_month" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
+                        <option value="">Select start month</option>
+                        {monthOptions.map((monthOption) => (
+                          <option key={`start-${monthOption}`} value={monthOption}>
+                            {monthOption}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">Start year</label>
+                      <select name="start_year" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
+                        <option value="">Select start year</option>
+                        {startYearOptions.map((yearOption) => (
+                          <option key={`year-${yearOption}`} value={yearOption}>
+                            {yearOption}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">End month</label>
+                      <select name="end_month" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
+                        <option value="">Select end month</option>
+                        {monthOptions.map((monthOption) => (
+                          <option key={`end-${monthOption}`} value={monthOption}>
+                            {monthOption}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-slate-700">End year</label>
+                      <select name="end_year" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" required>
+                        <option value="">Select end year</option>
+                        {endYearOptions.map((yearOption) => (
+                          <option key={`end-year-${yearOption}`} value={yearOption}>
+                            {yearOption}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Target graduation year(s)</label>
+                    <div className="mt-2 grid grid-cols-3 gap-2 rounded-md border border-slate-200 p-2">
+                      {graduationYearOptions.map((year) => (
+                        <label key={year} className="flex items-center gap-2 text-xs text-slate-700">
+                          <input type="checkbox" name="target_graduation_years" value={year} />
+                          {year}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Apply deadline</label>
+                    <input type="date" name="apply_deadline" className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm" />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Admin notes (private)</label>
+                    <textarea
+                      name="admin_notes"
+                      rows={3}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button
+                      type="submit"
+                      name="create_mode"
+                      value="publish"
+                      className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                    >
+                      Publish active
+                    </button>
+                    <button
+                      type="submit"
+                      name="create_mode"
+                      value="draft"
+                      className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Save draft
+                    </button>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <div className="space-y-3 lg:col-span-7">
+              <details open className="rounded-xl border border-slate-200 bg-white">
+                <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">Details</summary>
+                <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Description</label>
+                    <textarea
+                      name="description"
+                      rows={5}
+                      defaultValue={selectedTemplate?.description ?? ''}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      placeholder="Role overview, team context, impact."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Responsibilities (newline or comma separated)</label>
+                    <textarea
+                      name="responsibilities"
+                      rows={4}
+                      defaultValue={defaultResponsibilities}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Qualifications (newline or comma separated)</label>
+                    <textarea
+                      name="qualifications"
+                      rows={4}
+                      defaultValue={defaultQualifications}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                    />
+                    <p className="mt-1 text-xs text-slate-500">
+                      Narrative only. Qualifications are not used directly for match scoring.
+                    </p>
+                  </div>
+
+                  <CatalogMultiSelect
+                    label="Required skills"
+                    fieldName="required_skills"
+                    idsFieldName="required_skill_ids"
+                    customFieldName="required_skill_custom"
+                    inputId="required-skills-input"
+                    options={skillCatalog}
+                    initialLabels={parseList(defaultRequiredSkills)}
+                    helperText="Type to search canonical skills. Enter adds custom text if no match."
+                  />
+
+                  <CatalogMultiSelect
+                    label="Preferred skills"
+                    fieldName="preferred_skills"
+                    idsFieldName="preferred_skill_ids"
+                    customFieldName="preferred_skill_custom"
+                    inputId="preferred-skills-input"
+                    options={skillCatalog}
+                    initialLabels={parseList(defaultPreferredSkills)}
+                    helperText="Preferred skills improve ranking but do not hard-filter candidates."
+                  />
+
+                  <CatalogMultiSelect
+                    label="Recommended coursework categories"
+                    fieldName="recommended_coursework_categories"
+                    idsFieldName="recommended_coursework_category_ids"
+                    customFieldName="recommended_coursework_category_custom"
+                    inputId="recommended-coursework-category-input"
+                    options={courseworkCategoriesCatalog}
+                    initialLabels={parseList(defaultRecommendedCourseworkCategories)}
+                    helperText="Use categories so students from different schools match."
+                  />
+
+                  <CatalogMultiSelect
+                    label="Specific courses (optional)"
+                    fieldName="recommended_coursework"
+                    idsFieldName="recommended_coursework_ids"
+                    customFieldName="recommended_coursework_custom"
+                    inputId="recommended-coursework-input"
+                    options={courseworkCatalog}
+                    initialLabels={[]}
+                    helperText="Optional course titles for recruiter context. Categories drive matching."
+                  />
+                </div>
+              </details>
+            </div>
+          </form>
         </div>
+
       </section>
     </main>
   )

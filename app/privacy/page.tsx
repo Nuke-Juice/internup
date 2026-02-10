@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { ArrowLeft } from 'lucide-react'
 
 const EFFECTIVE_DATE = 'February 10, 2026'
 
@@ -6,7 +7,14 @@ export default function PrivacyPage() {
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-12">
       <div className="mx-auto max-w-3xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h1 className="text-3xl font-semibold text-slate-900">Privacy Policy</h1>
+        <Link
+          href="/"
+          aria-label="Go back"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </Link>
+        <h1 className="mt-2 text-3xl font-semibold text-slate-900">Privacy Policy</h1>
         <p className="mt-2 text-sm text-slate-600">Effective date: {EFFECTIVE_DATE}</p>
 
         <section className="mt-8 space-y-4 text-sm leading-6 text-slate-700">
@@ -58,11 +66,6 @@ export default function PrivacyPage() {
           </p>
         </section>
 
-        <div className="mt-8">
-          <Link href="/" className="text-sm font-medium text-blue-700 hover:underline">
-            Back to Internactive
-          </Link>
-        </div>
       </div>
     </main>
   )

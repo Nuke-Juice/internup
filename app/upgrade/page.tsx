@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { ArrowLeft } from 'lucide-react'
 import {
   createBillingPortalSessionAction,
   startProEmployerCheckoutAction,
@@ -102,17 +103,18 @@ export default async function UpgradePage({
   return (
     <main className="min-h-screen bg-slate-50">
       <section className="mx-auto max-w-6xl px-6 py-12">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-3xl font-semibold text-slate-900">Choose your employer plan</h1>
-            <p className="mt-2 text-slate-600">Scale from one posting to an always-on recruiting pipeline.</p>
-          </div>
+        <div>
           <Link
             href="/dashboard/employer"
-            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+            aria-label="Go back"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
           >
-            Back to Dashboard
+            <ArrowLeft className="h-5 w-5" />
           </Link>
+          <div>
+            <h1 className="mt-2 text-3xl font-semibold text-slate-900">Choose your employer plan</h1>
+            <p className="mt-2 text-slate-600">Scale from one posting to an always-on recruiting pipeline.</p>
+          </div>
         </div>
 
         {resolvedSearchParams?.checkout === 'success' && (

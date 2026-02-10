@@ -171,7 +171,7 @@ export default function SiteHeader({ isAuthenticated, role, email, isEmailVerifi
                 For Employers
               </Link>
             ) : isAdmin ? (
-              <Link href="/admin/internships" className={textLinkClasses(adminActive)}>
+              <Link href="/admin" className={textLinkClasses(adminActive)}>
                 Admin Dashboard
               </Link>
             ) : role === 'student' ? (
