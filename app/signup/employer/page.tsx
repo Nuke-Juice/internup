@@ -4,13 +4,17 @@ import Link from 'next/link'
 import { useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
+import TurnstileWidget from '@/components/security/TurnstileWidget'
 
 const FIELD =
   'mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100'
 
 export default function EmployerSignupPage() {
+  const friendlyCaptchaError = 'Please verify you’re human and try again.'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [turnstileToken, setTurnstileToken] = useState('')
+  const [turnstileKey, setTurnstileKey] = useState(0)
 
   const [companyName, setCompanyName] = useState('')
   const [website, setWebsite] = useState('')
@@ -26,9 +30,32 @@ export default function EmployerSignupPage() {
 
     if (!email || !password) return setError('Email and password are required.')
     if (!companyName) return setError('Company name is required.')
+    if (!turnstileToken) return setError(friendlyCaptchaError)
 
     setLoading(true)
     const supabase = supabaseBrowser()
+    try {
+      const captchaResponse = await fetch('/api/turnstile/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: turnstileToken,
+          action: 'employer_signup',
+        }),
+      })
+
+      if (!captchaResponse.ok) {
+        setLoading(false)
+        setTurnstileToken('')
+        setTurnstileKey((value) => value + 1)
+        return setError(friendlyCaptchaError)
+      }
+    } catch {
+      setLoading(false)
+      setTurnstileToken('')
+      setTurnstileKey((value) => value + 1)
+      return setError(friendlyCaptchaError)
+    }
 
     const { data, error: signUpError } = await supabase.auth.signUp({
       email,
@@ -164,6 +191,13 @@ export default function EmployerSignupPage() {
             </div>
 
             {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
+
+            <TurnstileWidget
+              key={turnstileKey}
+              action="employer_signup"
+              className="mt-4"
+              onTokenChange={setTurnstileToken}
+            />
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-xs text-slate-500">

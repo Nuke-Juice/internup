@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { requireRole } from '@/lib/auth/requireRole'
 import { startStarterEmployerCheckoutAction } from '@/lib/billing/actions'
@@ -15,6 +16,8 @@ import { isVerifiedCityForState, normalizeStateCode } from '@/lib/locations/usLo
 import { supabaseServer } from '@/lib/supabase/server'
 import { guardEmployerInternshipPublish } from '@/lib/auth/verifiedActionGate'
 import InternshipLocationFields from '@/components/forms/InternshipLocationFields'
+import TurnstileWidget from '@/components/security/TurnstileWidget'
+import { verifyTurnstileToken } from '@/lib/security/turnstile'
 
 function normalizeList(value: string) {
   return value
@@ -114,6 +117,30 @@ export default async function EmployerDashboardPage({
     }
 
     const verification = await getEmployerVerificationStatus({ supabase: supabaseAction, userId: currentUser.id })
+    const requiresTurnstile = verification.plan.id === 'free'
+
+    if (requiresTurnstile) {
+      const token = String(formData.get('turnstile_token') ?? '').trim()
+      const requestHeaders = await headers()
+      const forwardedFor = requestHeaders.get('x-forwarded-for')
+      const remoteIp = forwardedFor ? forwardedFor.split(',')[0]?.trim() || null : null
+
+      const turnstile = await verifyTurnstileToken({
+        token,
+        expectedAction: 'create_internship',
+        remoteIp,
+      })
+
+      if (!turnstile.ok) {
+        console.debug('[turnstile] internship create verification failed', {
+          userId: currentUser.id,
+          remoteIp,
+          errorCodes: turnstile.errorCodes,
+        })
+        redirect('/dashboard/employer?error=Please+verify+you%E2%80%99re+human+and+try+again.')
+      }
+    }
+
     const { count } = await supabaseAction
       .from('internships')
       .select('id', { count: 'exact', head: true })
@@ -535,6 +562,12 @@ export default async function EmployerDashboardPage({
             </div>
 
             <div className="sm:col-span-2">
+              {plan.id === 'free' ? (
+                <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                  Quick human check required for free/unverified employers.
+                </div>
+              ) : null}
+              {plan.id === 'free' ? <TurnstileWidget action="create_internship" className="mb-3" /> : null}
               <button
                 type="submit"
                 className="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
