@@ -838,6 +838,37 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
           </Link>
         </div>
 
+        <div className="grid gap-3 md:grid-cols-3">
+          <a
+            href="#create-internship"
+            className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-800 shadow-sm hover:border-blue-300 hover:bg-blue-50"
+          >
+            Create internship
+          </a>
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Internships</div>
+            <div className="mt-2">
+              <a
+                href="#manage-internships"
+                className="inline-flex rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Manage internships
+              </a>
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Students</div>
+            <div className="mt-2">
+              <Link
+                href="/admin/students"
+                className="inline-flex rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Manage student profiles
+              </Link>
+            </div>
+          </div>
+        </div>
+
         {resolvedSearchParams?.error ? (
           <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {decodeURIComponent(resolvedSearchParams.error)}
@@ -849,7 +880,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
           </div>
         ) : null}
 
-        <div className="admin-readable rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div id="create-internship" className="admin-readable rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">Create internship</h2>
@@ -1170,7 +1201,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
           </form>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div id="manage-internships" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <form method="get" className="flex w-full max-w-lg items-end gap-2">
               <div className="w-full">
