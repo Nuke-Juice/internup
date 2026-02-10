@@ -3,8 +3,10 @@ import { redirect } from 'next/navigation'
 import EmployerAccount from '@/components/account/EmployerAccount'
 import StudentAccount from '@/components/account/StudentAccount'
 import { ensureUserRole } from '@/lib/auth/ensureUserRole'
+import { buildVerifyRequiredHref } from '@/lib/auth/emailVerification'
 import { getEmployerVerificationStatus } from '@/lib/billing/subscriptions'
 import { isAdminRole, isAppRole, isUserRole, type AppRole, type UserRole } from '@/lib/auth/roles'
+import { getMinimumProfileCompleteness } from '@/lib/profileCompleteness'
 import { supabaseServer } from '@/lib/supabase/server'
 
 const isDev = process.env.NODE_ENV !== 'production'
@@ -119,6 +121,10 @@ export default async function AccountPage() {
         </div>
       </main>
     )
+  }
+
+  if (!user.email_confirmed_at) {
+    redirect(buildVerifyRequiredHref('/account', 'signup_continue'))
   }
 
   const { data: userRow } = await supabase
@@ -273,6 +279,10 @@ export default async function AccountPage() {
       .eq('user_id', user.id)
       .maybeSingle()
 
+    if (!getMinimumProfileCompleteness(profile).ok) {
+      redirect('/signup/student/details')
+    }
+
     return (
       <main className="min-h-screen bg-slate-50 px-6 py-10">
         <div className="mx-auto max-w-5xl">
@@ -295,6 +305,10 @@ export default async function AccountPage() {
       .order('created_at', { ascending: false })
       .limit(6),
   ])
+
+  if (!employerProfile?.company_name?.trim() || !employerProfile?.location_address_line1?.trim()) {
+    redirect('/signup/employer/details')
+  }
   const recentInternships = (internships ?? []) as InternshipRow[]
   const latestInternship = recentInternships[0] ?? null
 

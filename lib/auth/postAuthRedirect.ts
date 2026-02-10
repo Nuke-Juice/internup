@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getMinimumProfileCompleteness } from '@/lib/profileCompleteness'
 import { isAdminRole, isAppRole, isUserRole, type AppRole, type UserRole } from '@/lib/auth/roles'
+import { buildVerifyRequiredHref } from '@/lib/auth/emailVerification'
 
 type RoleLookupRow = { role: UserRole | null } | null
 
@@ -20,8 +21,21 @@ function defaultDestinationForRole(role: AppRole) {
   return role === 'student' ? '/' : '/dashboard/employer'
 }
 
+function signupDetailsPathForRole(role: AppRole) {
+  return role === 'student' ? '/signup/student/details' : '/signup/employer/details'
+}
+
 function isAccountPath(path: string | null) {
   return path === '/account' || Boolean(path?.startsWith('/account?'))
+}
+
+function isSignupDetailsPath(path: string | null) {
+  return (
+    path === '/signup/student/details' ||
+    path === '/signup/employer/details' ||
+    Boolean(path?.startsWith('/signup/student/details?')) ||
+    Boolean(path?.startsWith('/signup/employer/details?'))
+  )
 }
 
 async function isOnboardingComplete(supabase: SupabaseClient, userId: string, role: AppRole) {
@@ -37,19 +51,35 @@ async function isOnboardingComplete(supabase: SupabaseClient, userId: string, ro
 
   const { data: profile } = await supabase
     .from('employer_profiles')
-    .select('company_name')
+    .select('company_name, location_address_line1')
     .eq('user_id', userId)
     .maybeSingle()
 
-  return isNonEmpty(profile?.company_name)
+  return isNonEmpty(profile?.company_name) && isNonEmpty(profile?.location_address_line1)
 }
 
 export async function resolvePostAuthRedirect(params: {
   supabase: SupabaseClient
   userId: string
   requestedNextPath?: string | null
+  user?: { email_confirmed_at?: string | null } | null
 }) {
   const normalizedNext = normalizeNextPath(params.requestedNextPath ?? null)
+  const authUser =
+    params.user ??
+    (
+      await params.supabase.auth.getUser()
+    ).data.user
+
+  if (!authUser?.email_confirmed_at) {
+    const verifyNext = normalizedNext ?? '/account'
+    return {
+      destination: buildVerifyRequiredHref(verifyNext, 'signup_continue'),
+      role: null as UserRole | null,
+      onboardingComplete: false,
+    }
+  }
+
   const { data: userRow } = await params.supabase
     .from('users')
     .select('role')
@@ -83,15 +113,16 @@ export async function resolvePostAuthRedirect(params: {
 
   const onboardingComplete = await isOnboardingComplete(params.supabase, params.userId, role)
   if (!onboardingComplete) {
+    const onboardingPath = signupDetailsPathForRole(role)
     return {
-      destination: '/account',
+      destination: onboardingPath,
       role,
       onboardingComplete: false,
     }
   }
 
   const fallback = defaultDestinationForRole(role)
-  if (!normalizedNext || isAccountPath(normalizedNext)) {
+  if (!normalizedNext || isAccountPath(normalizedNext) || isSignupDetailsPath(normalizedNext)) {
     return {
       destination: fallback,
       role,

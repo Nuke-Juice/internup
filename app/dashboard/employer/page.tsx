@@ -6,6 +6,7 @@ import { startStarterEmployerCheckoutAction } from '@/lib/billing/actions'
 import { getRemainingCapacity, isUnlimitedInternships } from '@/lib/billing/plan'
 import { isPlanLimitReachedCode, PLAN_LIMIT_REACHED } from '@/lib/billing/plan'
 import { getEmployerVerificationStatus } from '@/lib/billing/subscriptions'
+import { buildVerifyRequiredHref } from '@/lib/auth/emailVerification'
 import {
   INTERNSHIP_VALIDATION_ERROR,
   type InternshipValidationErrorCode,
@@ -84,6 +85,9 @@ export default async function EmployerDashboardPage({
   searchParams?: Promise<{ error?: string; success?: string; code?: string; create?: string; limit?: string; current?: string }>
 }) {
   const { user } = await requireRole('employer')
+  if (!user.email_confirmed_at) {
+    redirect(buildVerifyRequiredHref('/dashboard/employer', 'signup_continue'))
+  }
   const resolvedSearchParams = searchParams ? await searchParams : undefined
   const supabase = await supabaseServer()
   const monthOptions = getMonthOptions()
@@ -92,9 +96,13 @@ export default async function EmployerDashboardPage({
 
   const { data: employerProfile } = await supabase
     .from('employer_profiles')
-    .select('company_name')
+    .select('company_name, location_address_line1')
     .eq('user_id', user.id)
     .single()
+
+  if (!employerProfile?.company_name?.trim() || !employerProfile?.location_address_line1?.trim()) {
+    redirect('/signup/employer/details')
+  }
 
   const { data: internships } = await supabase
     .from('internships')
@@ -522,7 +530,7 @@ export default async function EmployerDashboardPage({
                 className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
                 placeholder="Finance, Accounting, Economics"
               />
-              <p className="mt-1 text-xs text-slate-500">Comma-separated list is fine for MVP.</p>
+              <p className="mt-1 text-xs text-slate-500">Use a comma-separated list.</p>
             </div>
 
             <div className="sm:col-span-2">

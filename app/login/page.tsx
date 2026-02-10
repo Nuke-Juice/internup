@@ -44,10 +44,11 @@ export default async function LoginPage({
     const { data: authData } = await supabase.auth.getUser()
     if (!authData.user) redirect('/login?error=Unable+to+load+session.')
 
-    const { destination } = await resolvePostAuthRedirect({
+  const { destination } = await resolvePostAuthRedirect({
       supabase,
       userId: authData.user.id,
       requestedNextPath: nextPath,
+      user: authData.user,
     })
 
     redirect(destination)

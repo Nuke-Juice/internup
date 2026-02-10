@@ -113,6 +113,7 @@ export default function EmployerAccount({
     location.trim() ||
     [locationCity.trim(), locationState.trim()].filter(Boolean).join(', ') ||
     ''
+  const businessAddressLabel = locationAddressLine1.trim()
 
   async function saveCompanyBasics() {
     setError(null)
@@ -320,6 +321,11 @@ export default function EmployerAccount({
                   )}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
+                  {businessAddressLabel ? (
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
+                      {businessAddressLabel}
+                    </span>
+                  ) : null}
                   {businessLocationLabel ? (
                     <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
                       {businessLocationLabel}
