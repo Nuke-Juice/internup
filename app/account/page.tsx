@@ -39,6 +39,7 @@ type EmployerProfileRow = {
   website: string | null
   contact_email: string | null
   industry: string | null
+  founded_date: string | null
   location: string | null
   location_city: string | null
   location_state: string | null
@@ -47,6 +48,20 @@ type EmployerProfileRow = {
   location_lat: number | null
   location_lng: number | null
   overview: string | null
+  avatar_url: string | null
+  header_image_url: string | null
+}
+
+type EmployerPublicProfileRow = {
+  employer_id: string
+  company_name: string | null
+  tagline: string | null
+  about_us: string | null
+  website: string | null
+  industry: string | null
+  founded_date: string | null
+  location_city: string | null
+  location_state: string | null
   avatar_url: string | null
   header_image_url: string | null
 }
@@ -329,11 +344,16 @@ export default async function AccountPage() {
     )
   }
 
-  const [{ data: employerProfile }, { data: internships }] = await Promise.all([
+  const [{ data: employerProfile }, { data: publicProfile }, { data: internships }] = await Promise.all([
     supabase
       .from('employer_profiles')
-      .select('company_name, website, contact_email, industry, location, location_city, location_state, location_zip, location_address_line1, location_lat, location_lng, overview, avatar_url, header_image_url')
+      .select('company_name, website, contact_email, industry, founded_date, location, location_city, location_state, location_zip, location_address_line1, location_lat, location_lng, overview, avatar_url, header_image_url')
       .eq('user_id', user.id)
+      .maybeSingle(),
+    supabase
+      .from('employer_public_profiles')
+      .select('employer_id, company_name, tagline, about_us, website, industry, founded_date, location_city, location_state, avatar_url, header_image_url')
+      .eq('employer_id', user.id)
       .maybeSingle(),
     supabase
       .from('internships')
@@ -343,9 +363,6 @@ export default async function AccountPage() {
       .limit(6),
   ])
 
-  if (!employerProfile?.company_name?.trim() || !employerProfile?.location_address_line1?.trim()) {
-    redirect('/signup/employer/details')
-  }
   const recentInternships = (internships ?? []) as InternshipRow[]
   const latestInternship = recentInternships[0] ?? null
 
@@ -367,6 +384,7 @@ export default async function AccountPage() {
         location_lat: employerProfile.location_lat,
         location_lng: employerProfile.location_lng,
         industry: isBlank(employerProfile.industry) ? inferredIndustry : employerProfile.industry,
+        founded_date: employerProfile.founded_date,
         overview: isBlank(employerProfile.overview) ? inferredOverview : employerProfile.overview,
         contact_email: isBlank(employerProfile.contact_email) ? (user.email ?? null) : employerProfile.contact_email,
       }
@@ -376,6 +394,7 @@ export default async function AccountPage() {
           website: null,
           contact_email: user.email ?? null,
           industry: inferredIndustry,
+          founded_date: null,
           location: inferredLocation,
           location_city: inferredCityState.city,
           location_state: inferredCityState.state,
@@ -389,6 +408,20 @@ export default async function AccountPage() {
         }
       : ((employerProfile ?? null) as EmployerProfileRow | null)
 
+  const publicProfileWithFallback: EmployerPublicProfileRow | null = {
+    employer_id: user.id,
+    company_name: publicProfile?.company_name ?? profileWithFallback?.company_name ?? inferredCompanyName,
+    tagline: publicProfile?.tagline ?? null,
+    about_us: publicProfile?.about_us ?? profileWithFallback?.overview ?? inferredOverview,
+    website: publicProfile?.website ?? profileWithFallback?.website ?? null,
+    industry: publicProfile?.industry ?? profileWithFallback?.industry ?? inferredIndustry,
+    founded_date: publicProfile?.founded_date ?? profileWithFallback?.founded_date ?? null,
+    location_city: publicProfile?.location_city ?? profileWithFallback?.location_city ?? inferredCityState.city,
+    location_state: publicProfile?.location_state ?? profileWithFallback?.location_state ?? inferredCityState.state,
+    avatar_url: publicProfile?.avatar_url ?? profileWithFallback?.avatar_url ?? null,
+    header_image_url: publicProfile?.header_image_url ?? profileWithFallback?.header_image_url ?? null,
+  }
+
   if (profileWithFallback) {
     const needsSync =
       !employerProfile ||
@@ -401,6 +434,7 @@ export default async function AccountPage() {
       profileWithFallback.location_lat !== employerProfile.location_lat ||
       profileWithFallback.location_lng !== employerProfile.location_lng ||
       profileWithFallback.industry !== employerProfile.industry ||
+      profileWithFallback.founded_date !== employerProfile.founded_date ||
       profileWithFallback.overview !== employerProfile.overview ||
       profileWithFallback.contact_email !== employerProfile.contact_email
 
@@ -412,6 +446,7 @@ export default async function AccountPage() {
           website: profileWithFallback.website,
           contact_email: profileWithFallback.contact_email,
           industry: profileWithFallback.industry,
+          founded_date: profileWithFallback.founded_date,
           location: profileWithFallback.location,
           location_city: profileWithFallback.location_city,
           location_state: profileWithFallback.location_state,
@@ -430,22 +465,28 @@ export default async function AccountPage() {
 
   const { planId } = await getEmployerVerificationStatus({ supabase, userId: user.id })
   const isEmailVerified = Boolean(user.email_confirmed_at)
+  const metadata = (user.user_metadata ?? {}) as { first_name?: string; last_name?: string; full_name?: string }
+  const fullNameTokens =
+    typeof metadata.full_name === 'string'
+      ? metadata.full_name
+          .split(/\s+/)
+          .map((token) => token.trim())
+          .filter(Boolean)
+      : []
+  const employerFirstName = typeof metadata.first_name === 'string' ? metadata.first_name : fullNameTokens[0] ?? ''
+  const employerLastName =
+    typeof metadata.last_name === 'string' ? metadata.last_name : fullNameTokens.slice(1).join(' ')
 
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-6xl">
-        <div className="mb-4 flex justify-end">
-          <Link
-            href="/account/security"
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Security settings
-          </Link>
-        </div>
         <EmployerAccount
           userId={user.id}
           userEmail={user.email ?? null}
+          initialFirstName={employerFirstName}
+          initialLastName={employerLastName}
           initialProfile={profileWithFallback}
+          initialPublicProfile={publicProfileWithFallback}
           recentInternships={recentInternships}
           planId={planId}
           isEmailVerified={isEmailVerified}

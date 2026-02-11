@@ -55,7 +55,7 @@ export default function ConfirmSignOutButton({
                 type="button"
                 onClick={handleSignOut}
                 disabled={signingOut}
-                className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+                className="rounded-md bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60"
               >
                 {signingOut ? 'Signing out...' : 'Sign out'}
               </button>

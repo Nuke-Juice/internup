@@ -13,6 +13,7 @@ import { hasSupabaseAdminCredentials, supabaseAdmin } from '@/lib/supabase/admin
 
 type SearchParams = Promise<{
   q?: string
+  edit?: string
   sent?: string
   resent?: string
   contactSaved?: string
@@ -34,6 +35,7 @@ type InternshipRow = {
 
 function encodeParams(input: {
   q: string
+  edit?: string
   sent?: string
   resent?: string
   contactSaved?: string
@@ -41,6 +43,7 @@ function encodeParams(input: {
 }) {
   const params = new URLSearchParams()
   if (input.q.trim()) params.set('q', input.q.trim())
+  if (input.edit?.trim()) params.set('edit', input.edit.trim())
   if (input.sent) params.set('sent', input.sent)
   if (input.resent) params.set('resent', input.resent)
   if (input.contactSaved) params.set('contactSaved', input.contactSaved)
@@ -112,6 +115,7 @@ export default async function AdminEmployersPage({ searchParams }: { searchParam
       .toLowerCase()
     return haystack.includes(q)
   })
+  const editingEmployerId = (resolvedSearchParams?.edit ?? '').trim()
 
   async function updateContactEmailAction(formData: FormData) {
     'use server'
@@ -119,10 +123,29 @@ export default async function AdminEmployersPage({ searchParams }: { searchParam
     await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/employers' })
     const employerId = String(formData.get('employer_id') ?? '').trim()
     const contactEmail = String(formData.get('contact_email') ?? '').trim().toLowerCase()
+    const confirmed = String(formData.get('confirm_contact_change') ?? '') === 'on'
     const qValue = String(formData.get('q') ?? '').trim()
 
     if (!employerId) {
       redirect(`/admin/employers${encodeParams({ q: qValue, error: 'Missing employer context' })}`)
+    }
+    if (!confirmed) {
+      redirect(
+        `/admin/employers${encodeParams({
+          q: qValue,
+          edit: employerId,
+          error: 'Confirm the email change before saving.',
+        })}`
+      )
+    }
+    if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) {
+      redirect(
+        `/admin/employers${encodeParams({
+          q: qValue,
+          edit: employerId,
+          error: 'Enter a valid email address.',
+        })}`
+      )
     }
 
     const adminWrite = supabaseAdmin()
@@ -230,7 +253,7 @@ export default async function AdminEmployersPage({ searchParams }: { searchParam
           </Link>
           <div>
             <h1 className="mt-2 text-2xl font-semibold text-slate-900">Admin employers</h1>
-            <p className="mt-1 text-sm text-slate-600">Manage employer contact emails and claim access links.</p>
+            <p className="mt-1 text-sm text-slate-600">Manage claim-link contacts and employer access links.</p>
           </div>
         </div>
 
@@ -238,7 +261,7 @@ export default async function AdminEmployersPage({ searchParams }: { searchParam
           <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{resolvedSearchParams.error}</div>
         ) : null}
         {resolvedSearchParams?.contactSaved ? (
-          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">Employer contact saved.</div>
+          <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">Claim-link contact email saved.</div>
         ) : null}
         {resolvedSearchParams?.deleted ? (
           <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">Employer account deleted.</div>
@@ -298,22 +321,49 @@ export default async function AdminEmployersPage({ searchParams }: { searchParam
                           <div className="text-xs text-slate-500">{employer.user_id}</div>
                         </td>
                         <td className="px-3 py-3">
-                          <form action={updateContactEmailAction} className="flex items-center gap-2">
-                            <input type="hidden" name="employer_id" value={employer.user_id} />
-                            <input type="hidden" name="q" value={resolvedSearchParams?.q ?? ''} />
-                            <input
-                              name="contact_email"
-                              defaultValue={employer.contact_email ?? ''}
-                              placeholder="name@company.com"
-                              className="w-72 rounded-md border border-slate-300 bg-white p-2 text-sm"
-                            />
-                            <button
-                              type="submit"
-                              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                            >
-                              Save
-                            </button>
-                          </form>
+                          {editingEmployerId === employer.user_id ? (
+                            <form action={updateContactEmailAction} className="space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 p-2.5">
+                              <input type="hidden" name="employer_id" value={employer.user_id} />
+                              <input type="hidden" name="q" value={resolvedSearchParams?.q ?? ''} />
+                              <label className="text-[11px] font-medium uppercase tracking-wide text-slate-600">Claim link email</label>
+                              <input
+                                name="contact_email"
+                                defaultValue={employer.contact_email ?? ''}
+                                placeholder="name@company.com"
+                                className="w-72 rounded-md border border-slate-300 bg-white p-2 text-sm"
+                              />
+                              <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-700">
+                                <input type="checkbox" name="confirm_contact_change" />
+                                Confirm email change
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="submit"
+                                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                >
+                                  Save email
+                                </button>
+                                <Link
+                                  href={`/admin/employers${encodeParams({ q: resolvedSearchParams?.q ?? '' })}`}
+                                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                >
+                                  Cancel
+                                </Link>
+                              </div>
+                            </form>
+                          ) : (
+                            <div className="space-y-1.5">
+                              <div className="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2 text-sm text-slate-800">
+                                {employer.contact_email?.trim() || 'No contact email set'}
+                              </div>
+                              <Link
+                                href={`/admin/employers${encodeParams({ q: resolvedSearchParams?.q ?? '', edit: employer.user_id })}`}
+                                className="inline-flex rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                Change email
+                              </Link>
+                            </div>
+                          )}
                         </td>
                         <td className="px-3 py-3 text-xs text-slate-700">
                           <div>Pending tokens: {claimStatus.pendingCount}</div>

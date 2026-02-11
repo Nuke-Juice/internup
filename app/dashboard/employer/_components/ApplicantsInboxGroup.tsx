@@ -9,6 +9,7 @@ type Applicant = {
   appliedAt: string | null
   matchScore: number | null
   topReasons: string[]
+  readinessLabel?: string | null
   resumeUrl: string | null
   status: 'submitted' | 'reviewing' | 'interview' | 'rejected' | 'accepted'
   notes: string | null
@@ -19,6 +20,9 @@ type Props = {
   internshipTitle: string
   applicants: Applicant[]
   onUpdate: (formData: FormData) => Promise<void>
+  showMatchScore: boolean
+  showReasons: boolean
+  showReadiness: boolean
 }
 
 function formatDate(value: string | null) {
@@ -46,6 +50,9 @@ export default function ApplicantsInboxGroup({
   internshipTitle,
   applicants,
   onUpdate,
+  showMatchScore,
+  showReasons,
+  showReadiness,
 }: Props) {
   return (
     <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -60,8 +67,9 @@ export default function ApplicantsInboxGroup({
             <tr>
               <th className="px-4 py-3 font-medium">Applicant</th>
               <th className="px-4 py-3 font-medium">Applied</th>
-              <th className="px-4 py-3 font-medium">Match</th>
-              <th className="px-4 py-3 font-medium">Reasons</th>
+              {showMatchScore ? <th className="px-4 py-3 font-medium">Match</th> : null}
+              {showReasons ? <th className="px-4 py-3 font-medium">Reasons</th> : null}
+              {showReadiness ? <th className="px-4 py-3 font-medium">Readiness</th> : null}
               <th className="px-4 py-3 font-medium">Resume</th>
               <th className="px-4 py-3 font-medium">Status</th>
               <th className="px-4 py-3 font-medium">Notes</th>
@@ -78,20 +86,27 @@ export default function ApplicantsInboxGroup({
                   </div>
                 </td>
                 <td className="px-4 py-3 text-slate-700">{formatDate(applicant.appliedAt)}</td>
-                <td className="px-4 py-3 text-slate-900">
-                  {typeof applicant.matchScore === 'number' ? applicant.matchScore : '—'}
-                </td>
-                <td className="px-4 py-3 text-xs text-slate-700">
-                  {applicant.topReasons.length > 0 ? (
-                    <ul className="list-disc space-y-1 pl-4">
-                      {applicant.topReasons.map((reason) => (
-                        <li key={`${applicant.id}-${reason}`}>{reason}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    '—'
-                  )}
-                </td>
+                {showMatchScore ? (
+                  <td className="px-4 py-3 text-slate-900">
+                    {typeof applicant.matchScore === 'number' ? applicant.matchScore : '—'}
+                  </td>
+                ) : null}
+                {showReasons ? (
+                  <td className="px-4 py-3 text-xs text-slate-700">
+                    {applicant.topReasons.length > 0 ? (
+                      <ul className="list-disc space-y-1 pl-4">
+                        {applicant.topReasons.map((reason) => (
+                          <li key={`${applicant.id}-${reason}`}>{reason}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                ) : null}
+                {showReadiness ? (
+                  <td className="px-4 py-3 text-xs text-slate-700">{applicant.readinessLabel ?? 'Baseline'}</td>
+                ) : null}
                 <td className="px-4 py-3">
                   {applicant.resumeUrl ? (
                     <a

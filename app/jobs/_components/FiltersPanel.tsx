@@ -5,6 +5,7 @@ import { ChevronDown } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 
 type FilterState = {
+  sort: 'best_match' | 'newest'
   searchQuery: string
   category: string
   payMin: string
@@ -53,6 +54,7 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
     const merged: FilterState = { ...state, ...overrides }
     const params = new URLSearchParams()
 
+    if (merged.sort) params.set('sort', merged.sort)
     if (merged.searchQuery) params.set('q', merged.searchQuery)
     if (merged.category) params.set('category', merged.category)
     if (merged.payMin) params.set('paymin', merged.payMin)
@@ -126,6 +128,7 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
         <h2 className="text-sm font-semibold text-slate-900">Filters</h2>
         <Link
           href={href({
+            sort: state.sort,
             searchQuery: '',
             category: '',
             payMin: '',
@@ -180,6 +183,7 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
         </section>
 
         <form action={submitAction} className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          {state.sort ? <input type="hidden" name="sort" value={state.sort} /> : null}
           {state.searchQuery ? <input type="hidden" name="q" value={state.searchQuery} /> : null}
           {state.category ? <input type="hidden" name="category" value={state.category} /> : null}
           {state.remoteOnly ? <input type="hidden" name="remote" value="1" /> : null}

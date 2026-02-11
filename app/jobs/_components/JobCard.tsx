@@ -6,6 +6,7 @@ type Listing = {
   id: string
   title: string | null
   company_name: string | null
+  employer_id?: string | null
   employer_verification_tier?: string | null
   location: string | null
   role_category?: string | null
@@ -26,7 +27,8 @@ type Props = {
   listing: Listing
   isAuthenticated: boolean
   userRole?: 'student' | 'employer' | null
-  matchSignals: string[]
+  showWhyMatch?: boolean
+  whyMatchReasons?: string[]
 }
 
 function badgeClass(primary = false) {
@@ -36,14 +38,30 @@ function badgeClass(primary = false) {
   return 'inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700'
 }
 
-export default function JobCard({ listing, isAuthenticated, userRole = null, matchSignals }: Props) {
+export default function JobCard({
+  listing,
+  isAuthenticated,
+  userRole = null,
+  showWhyMatch = false,
+  whyMatchReasons = [],
+}: Props) {
   return (
     <article className="group rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h2 className="truncate text-lg font-semibold text-slate-900">{listing.title || 'Internship'}</h2>
           <div className="mt-1 flex flex-wrap items-center gap-2">
-            <p className="text-sm font-medium text-slate-700">{listing.company_name || 'Company'}</p>
+            {listing.employer_id ? (
+              <Link
+                href={`/employers/${encodeURIComponent(listing.employer_id)}`}
+                className="text-sm font-medium text-blue-700 hover:underline"
+                title="View employer profile"
+              >
+                {listing.company_name || 'Company'}
+              </Link>
+            ) : (
+              <p className="text-sm font-medium text-slate-700">{listing.company_name || 'Company'}</p>
+            )}
             <EmployerVerificationBadge tier={listing.employer_verification_tier ?? 'free'} />
           </div>
         </div>
@@ -87,12 +105,15 @@ export default function JobCard({ listing, isAuthenticated, userRole = null, mat
         </p>
       ) : null}
 
-      {isAuthenticated && matchSignals.length > 0 ? (
-        <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50/60 px-3 py-2">
-          <p className="line-clamp-1 text-xs text-emerald-800">
-            <span className="font-semibold">Why this matches:</span> {matchSignals.join(' • ')}
-          </p>
-        </div>
+      {isAuthenticated && showWhyMatch && whyMatchReasons.length > 0 ? (
+        <details className="mt-3 inline-block rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs text-emerald-800">
+          <summary className="cursor-pointer list-none font-medium">Why this matches</summary>
+          <ul className="mt-2 list-disc space-y-0.5 pl-4 text-left text-[11px] text-emerald-900">
+            {whyMatchReasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </details>
       ) : null}
 
       <div className="mt-5 flex items-center gap-2">

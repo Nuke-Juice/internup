@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { parseMajors, rankInternships } from '@/lib/matching'
+import { getEmployerPlanFeatures } from '@/lib/billing/plan'
 import { getCommuteMinutesForListings, toGeoPoint } from '@/lib/commute'
 import { fetchInternships, formatMajors } from '@/lib/jobs/internships'
 import { parseStudentPreferenceSignals } from '@/lib/student/preferenceSignals'
@@ -22,6 +23,7 @@ const categoryTiles = [
 ]
 
 export type JobsQuery = {
+  sort?: string
   q?: string
   category?: string
   paymin?: string
@@ -41,13 +43,20 @@ type JobsViewProps = {
   anchorId?: string
 }
 
-function seasonFromMonth(value: string | null | undefined) {
-  const normalized = (value ?? '').trim().toLowerCase()
-  if (normalized.startsWith('jun') || normalized.startsWith('jul') || normalized.startsWith('aug')) return 'summer'
-  if (normalized.startsWith('sep') || normalized.startsWith('oct') || normalized.startsWith('nov')) return 'fall'
-  if (normalized.startsWith('dec') || normalized.startsWith('jan') || normalized.startsWith('feb')) return 'winter'
-  if (normalized.startsWith('mar') || normalized.startsWith('apr') || normalized.startsWith('may')) return 'spring'
-  return ''
+type SortMode = 'best_match' | 'newest'
+
+function normalizeSort(value: string | undefined, isStudent: boolean): SortMode {
+  if (value === 'best_match' || value === 'newest') {
+    if (!isStudent && value === 'best_match') return 'newest'
+    return value
+  }
+  return isStudent ? 'best_match' : 'newest'
+}
+
+function withSearchParams(basePath: string, params: URLSearchParams, anchorId?: string) {
+  const query = params.toString()
+  const hash = anchorId ? `#${anchorId}` : ''
+  return query ? `${basePath}?${query}${hash}` : `${basePath}${hash}`
 }
 
 function buildBrowseHref(basePath: string, anchorId?: string) {
@@ -150,6 +159,12 @@ function getStudentProfileCompletion(profile: {
   return { completed, total, percent, isComplete: completed === total }
 }
 
+function tierPriorityScore(tier: string | null | undefined) {
+  if (!tier) return 0
+  const normalized = tier === 'starter' || tier === 'pro' ? tier : 'free'
+  return getEmployerPlanFeatures(normalized).priorityPlacementInStudentFeed ? 1 : 0
+}
+
 export function JobsViewSkeleton({ showHero = false }: { showHero?: boolean }) {
   return (
     <>
@@ -195,6 +210,7 @@ export default async function JobsView({
 }: JobsViewProps) {
   const showBrowseHeroButton = basePath !== '/'
   const resolvedSearchParams = ((searchParams ? await Promise.resolve(searchParams) : {}) ?? {}) as JobsQuery
+  const requestedSortRaw = resolvedSearchParams.sort
   const searchQuery = (resolvedSearchParams.q ?? '').trim()
   const normalizedSearchQuery = searchQuery.toLowerCase()
   const activeCategory = resolvedSearchParams.category ?? ''
@@ -243,8 +259,7 @@ export default async function JobsView({
   ).sort((a, b) => a.localeCompare(b))
   const locationQuery = verifiedLocations.includes(rawLocationQuery) ? rawLocationQuery : ''
 
-  let sortedInternships = internships
-  let isBestMatch = false
+  let activeSortMode: SortMode = 'newest'
   let profileMajors: string[] = []
   let profileYear: string | null = null
   let profileExperienceLevel: string | null = null
@@ -252,6 +267,9 @@ export default async function JobsView({
   let profileCoursework: string[] = []
   let profileSkills: string[] = []
   let profileSkillIds: string[] = []
+  let profileCourseworkItemIds: string[] = []
+  let profileCourseworkCategoryIds: string[] = []
+  let preferenceSignals = parseStudentPreferenceSignals(null)
   let studentTransportMode: string | null = null
   let studentMaxCommuteMinutes: number | null = null
   let studentLocation: { city: string | null; state: string | null; zip: string | null; point: { lat: number; lng: number } | null } = {
@@ -260,7 +278,7 @@ export default async function JobsView({
     zip: null,
     point: null,
   }
-  const matchReasonsById = new Map<string, string[]>()
+  const whyMatchById = new Map<string, string[]>()
   const commuteMinutesById = new Map<string, number>()
   let role: 'student' | 'employer' | undefined
   let showCompleteProfileBanner = false
@@ -310,7 +328,7 @@ export default async function JobsView({
           (course): course is string => typeof course === 'string' && course.length > 0
         )
       : []
-    const preferenceSignals = parseStudentPreferenceSignals(profile?.interests ?? null)
+    preferenceSignals = parseStudentPreferenceSignals(profile?.interests ?? null)
     profileSkills = preferenceSignals.skills
     studentTransportMode = typeof profile?.transport_mode === 'string' ? profile.transport_mode : 'driving'
     studentMaxCommuteMinutes = typeof profile?.max_commute_minutes === 'number' ? profile.max_commute_minutes : null
@@ -326,10 +344,10 @@ export default async function JobsView({
     profileSkillIds = (studentSkillRows ?? [])
       .map((row) => row.skill_id)
       .filter((value): value is string => typeof value === 'string')
-    const profileCourseworkItemIds = (studentCourseworkRows ?? [])
+    profileCourseworkItemIds = (studentCourseworkRows ?? [])
       .map((row) => row.coursework_item_id)
       .filter((value): value is string => typeof value === 'string')
-    const profileCourseworkCategoryIds = (studentCourseworkCategoryRows ?? [])
+    profileCourseworkCategoryIds = (studentCourseworkCategoryRows ?? [])
       .map((row) => row.category_id)
       .filter((value): value is string => typeof value === 'string')
 
@@ -339,76 +357,12 @@ export default async function JobsView({
       showCompleteProfileBanner = !completion.isComplete
     }
 
-    if (
-      role === 'student' &&
-      (profileMajors.length > 0 ||
-        typeof profileAvailability === 'number' ||
-        profileCoursework.length > 0 ||
-        profileSkillIds.length > 0 ||
-        Boolean(profileYear) ||
-        Boolean(profileExperienceLevel))
-    ) {
-      isBestMatch = true
-      const ranked = rankInternships(
-        internships.map((listing) => ({
-          id: listing.id,
-          title: listing.title,
-          description: listing.description,
-          majors: listing.majors,
-          target_graduation_years: listing.target_graduation_years,
-          experience_level: listing.experience_level,
-          category: listing.role_category ?? listing.category ?? null,
-          hours_per_week: listing.hours_per_week,
-          location: listing.location,
-          work_mode: listing.work_mode,
-          term: listing.term,
-          required_skills: listing.required_skills,
-          preferred_skills: listing.preferred_skills,
-          recommended_coursework: listing.recommended_coursework,
-          required_skill_ids: listing.required_skill_ids,
-          preferred_skill_ids: listing.preferred_skill_ids,
-          coursework_item_ids: listing.coursework_item_ids,
-          coursework_category_ids: listing.coursework_category_ids,
-          coursework_category_names: listing.coursework_category_names,
-        })),
-        {
-          majors: profileMajors,
-          year: profileYear,
-          experience_level: profileExperienceLevel,
-          skills: profileSkills,
-          skill_ids: profileSkillIds,
-          coursework_item_ids: profileCourseworkItemIds,
-          coursework_category_ids: profileCourseworkCategoryIds,
-          coursework: profileCoursework,
-          availability_hours_per_week: profileAvailability,
-          preferred_terms:
-            preferenceSignals.preferredTerms.length > 0
-              ? preferenceSignals.preferredTerms
-              : profile?.availability_start_month
-                ? [seasonFromMonth(profile.availability_start_month)]
-                : [],
-          preferred_locations: preferenceSignals.preferredLocations,
-          preferred_work_modes: preferenceSignals.preferredWorkModes,
-          remote_only: preferenceSignals.remoteOnly,
-        }
-      )
-
-      for (const item of ranked) {
-        matchReasonsById.set(item.internship.id, item.match.reasons.slice(0, 2))
-      }
-
-      const scoreById = new Map(ranked.map((item) => [item.internship.id, item.match.score]))
-      sortedInternships = internships
-        .filter((listing) => scoreById.has(listing.id))
-        .map((listing) => ({ ...listing, matchScore: scoreById.get(listing.id) ?? 0 }))
-        .sort((a, b) => {
-          if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore
-          return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
-        })
-    }
   }
 
-  const filteredInternships = sortedInternships.filter((listing) => {
+  const isStudent = role === 'student'
+  activeSortMode = normalizeSort(requestedSortRaw, isStudent)
+
+  const filteredCandidates = internships.filter((listing) => {
     const listingMajors = parseMajors(listing.majors)
     const normalizedTitle = listing.title?.toLowerCase() ?? ''
     const normalizedCompany = listing.company_name?.toLowerCase() ?? ''
@@ -484,6 +438,115 @@ export default async function JobsView({
     return true
   })
 
+  let filteredInternships = filteredCandidates
+
+  if (isStudent && activeSortMode === 'best_match') {
+    const ranked = rankInternships(
+      filteredCandidates.map((listing) => ({
+        id: listing.id,
+        title: listing.title,
+        description: listing.description,
+        majors: listing.majors,
+        target_graduation_years: listing.target_graduation_years,
+        experience_level: listing.experience_level,
+        category: listing.role_category ?? listing.category ?? null,
+        hours_per_week: listing.hours_per_week,
+        location: listing.location,
+        work_mode: listing.work_mode,
+        term: listing.term,
+        required_skills: listing.required_skills,
+        preferred_skills: listing.preferred_skills,
+        recommended_coursework: listing.recommended_coursework,
+        required_skill_ids: listing.required_skill_ids,
+        preferred_skill_ids: listing.preferred_skill_ids,
+        coursework_item_ids: listing.coursework_item_ids,
+        coursework_category_ids: listing.coursework_category_ids,
+        coursework_category_names: listing.coursework_category_names,
+      })),
+      {
+        majors: profileMajors,
+        year: profileYear,
+        experience_level: profileExperienceLevel,
+        skills: profileSkills,
+        skill_ids: profileSkillIds,
+        coursework_item_ids: profileCourseworkItemIds,
+        coursework_category_ids: profileCourseworkCategoryIds,
+        coursework: profileCoursework,
+        availability_hours_per_week: profileAvailability,
+        preferred_terms:
+          preferenceSignals.preferredTerms.length > 0
+            ? preferenceSignals.preferredTerms
+            : [],
+        preferred_locations: preferenceSignals.preferredLocations,
+        preferred_work_modes: preferenceSignals.preferredWorkModes,
+        remote_only: preferenceSignals.remoteOnly,
+      }
+    )
+
+    const scoreById = new Map(ranked.map((item) => [item.internship.id, item.match.score]))
+    filteredInternships = filteredCandidates
+      .filter((listing) => scoreById.has(listing.id))
+      .map((listing) => ({ ...listing, matchScore: scoreById.get(listing.id) ?? 0 }))
+      .sort((a, b) => {
+        if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore
+        const tierDiff = tierPriorityScore(b.employer_verification_tier) - tierPriorityScore(a.employer_verification_tier)
+        if (tierDiff !== 0) return tierDiff
+        return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+      })
+  } else {
+    filteredInternships = [...filteredCandidates].sort((a, b) => {
+      const tierDiff = tierPriorityScore(b.employer_verification_tier) - tierPriorityScore(a.employer_verification_tier)
+      if (tierDiff !== 0) return tierDiff
+      return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    })
+  }
+
+  const topBestMatchIds = new Set(
+    isStudent && activeSortMode === 'best_match'
+      ? filteredInternships.slice(0, 3).map((listing) => listing.id)
+      : []
+  )
+
+  if (isStudent && activeSortMode === 'best_match') {
+    for (const listing of filteredInternships.slice(0, 3)) {
+      const reasons: string[] = []
+      const listingMajors = parseMajors(listing.majors)
+      if (profileMajors.length > 0 && listingMajors.some((major) => profileMajors.includes(major))) {
+        reasons.push(`Matches your major (${profileMajors[0]})`)
+      }
+      if ((listing.experience_level ?? '').toLowerCase() === 'entry') {
+        reasons.push('Entry-level role')
+      }
+      if (
+        (listing.work_mode ?? '').toLowerCase().includes('remote') ||
+        (listing.location ?? '').toLowerCase().includes('remote')
+      ) {
+        reasons.push('Remote friendly')
+      }
+      const listingPayRange = extractNumericPayRange(listing.pay)
+      if (
+        typeof parsedPayMin === 'number' &&
+        Number.isFinite(parsedPayMin) &&
+        parsedPayMin > 0 &&
+        listingPayRange?.max &&
+        listingPayRange.max >= parsedPayMin
+      ) {
+        reasons.push('Pay meets your minimum')
+      }
+      if (
+        typeof profileAvailability === 'number' &&
+        profileAvailability > 0 &&
+        typeof listing.hours_per_week === 'number' &&
+        listing.hours_per_week <= profileAvailability
+      ) {
+        reasons.push('Fits your weekly availability')
+      }
+      if (reasons.length > 0) {
+        whyMatchById.set(listing.id, reasons.slice(0, 4))
+      }
+    }
+  }
+
   if (user && role === 'student' && filteredInternships.length > 0) {
     const employerIds = Array.from(
       new Set(
@@ -541,28 +604,71 @@ export default async function JobsView({
       commuteMinutesById.set(internshipId, minutes)
     }
   }
+
+  const activeFilterCount = [
+    Boolean(searchQuery),
+    Boolean(activeCategory),
+    Boolean(payMin),
+    remoteOnly,
+    Boolean(selectedExperience),
+    Boolean(hoursMin),
+    Boolean(hoursMax),
+    Boolean(locationQuery),
+    Boolean(radius),
+  ].filter(Boolean).length
+  const isHeavyFiltering = activeFilterCount >= 4
+  const shouldShowResetToMatchedView =
+    isStudent && (activeSortMode === 'newest' || isHeavyFiltering)
+
+  const preservedQueryParams = new URLSearchParams()
+  if (searchQuery) preservedQueryParams.set('q', searchQuery)
+  if (activeCategory) preservedQueryParams.set('category', activeCategory)
+  if (payMin) preservedQueryParams.set('paymin', payMin)
+  if (remoteOnly) preservedQueryParams.set('remote', '1')
+  if (selectedExperience) preservedQueryParams.set('exp', selectedExperience)
+  if (hoursMin) preservedQueryParams.set('hmin', hoursMin)
+  if (hoursMax) preservedQueryParams.set('hmax', hoursMax)
+  if (locationQuery) preservedQueryParams.set('loc', locationQuery)
+  if (radius) preservedQueryParams.set('radius', radius)
+
+  const bestMatchHref = (() => {
+    const params = new URLSearchParams(preservedQueryParams)
+    params.set('sort', 'best_match')
+    return withSearchParams(basePath, params, anchorId)
+  })()
+  const newestHref = (() => {
+    const params = new URLSearchParams(preservedQueryParams)
+    params.set('sort', 'newest')
+    return withSearchParams(basePath, params, anchorId)
+  })()
+
+  const resetMatchedViewHref = (() => {
+    const params = new URLSearchParams()
+    params.set('sort', 'best_match')
+    return withSearchParams(basePath, params, anchorId)
+  })()
+
+  const sortedByLabel = activeSortMode === 'best_match' ? 'Best match for you' : 'Newest'
   const listingsTitle = filteredInternships.length === 0 ? 'Browse internships' : 'Internships hiring now'
-  const compactStudentHero = showHero && role === 'student'
+  const compactSignedInHero = showHero && Boolean(user)
 
   return (
     <>
       {showHero ? (
         <section className="border-b border-blue-100 bg-gradient-to-b from-blue-50 to-slate-50">
-          <div className={`mx-auto max-w-6xl px-6 ${compactStudentHero ? 'py-6' : 'py-10'}`}>
+          <div className={`mx-auto max-w-6xl px-6 ${compactSignedInHero ? 'py-5' : 'py-10'}`}>
             <div className="mx-auto max-w-3xl text-center">
-              <h1 className={`font-semibold tracking-tight text-slate-900 ${compactStudentHero ? 'text-2xl sm:text-3xl' : 'text-3xl sm:text-4xl'}`}>
+              <h1 className={`font-semibold tracking-tight text-slate-900 ${compactSignedInHero ? 'text-2xl sm:text-3xl' : 'text-3xl sm:text-4xl'}`}>
                 {user
-                  ? role === 'student'
-                    ? 'Internships made for you.'
-                    : 'Find internships that fit your major and schedule.'
+                  ? 'Internships made for you'
                   : 'Create profile to get specialized internships matched to you.'}
               </h1>
-              <p className={`${compactStudentHero ? 'mt-2' : 'mt-3'} text-sm text-slate-600 sm:text-base`}>
+              <p className={`${compactSignedInHero ? 'mt-1.5' : 'mt-3'} text-sm text-slate-600 sm:text-base`}>
                 {user
                   ? 'Filter fast and start with roles you can actually apply to this term.'
                   : 'Browse first, then create your profile for better match ranking.'}
               </p>
-              <div className={`${compactStudentHero ? 'mt-4' : 'mt-6'} flex flex-wrap items-center justify-center gap-2`}>
+              <div className={`${compactSignedInHero ? 'mt-3' : 'mt-6'} flex flex-wrap items-center justify-center gap-2`}>
                 {showBrowseHeroButton && (
                   <Link
                     href={`#${anchorId}`}
@@ -610,7 +716,48 @@ export default async function JobsView({
             </p>
           </div>
           <div className="text-right text-xs font-medium text-slate-500">
-            <div>Sort: {isBestMatch ? 'Best match' : 'Newest'}</div>
+            {isStudent ? (
+              <div className="flex items-center justify-end gap-2">
+                <Link
+                  href={bestMatchHref}
+                  className={`inline-flex items-center rounded-md border px-2.5 py-1 ${
+                    activeSortMode === 'best_match'
+                      ? 'border-blue-300 bg-blue-50 text-blue-700'
+                      : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  Best match {activeSortMode === 'best_match' ? '✓' : ''}
+                </Link>
+                <Link
+                  href={newestHref}
+                  className={`inline-flex items-center rounded-md border px-2.5 py-1 ${
+                    activeSortMode === 'newest'
+                      ? 'border-blue-300 bg-blue-50 text-blue-700'
+                      : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  Newest {activeSortMode === 'newest' ? '✓' : ''}
+                </Link>
+              </div>
+            ) : null}
+            <div className="mt-1 flex items-center justify-end gap-1">
+              <span>Sorted by: {sortedByLabel}</span>
+              {activeSortMode === 'best_match' ? (
+                <span
+                  title="Based on your major, experience, and preferences"
+                  className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 text-[10px] text-slate-500"
+                >
+                  i
+                </span>
+              ) : null}
+            </div>
+            {shouldShowResetToMatchedView ? (
+              <div className="mt-1">
+                <Link href={resetMatchedViewHref} className="text-blue-700 hover:underline">
+                  Reset to matched view
+                </Link>
+              </div>
+            ) : null}
             <div className="mt-1">{filteredInternships.length} results</div>
           </div>
         </div>
@@ -620,6 +767,7 @@ export default async function JobsView({
             categories={categoryTiles}
             verifiedLocations={verifiedLocations}
             state={{
+              sort: activeSortMode,
               searchQuery,
               category: activeCategory,
               payMin,
@@ -702,7 +850,8 @@ export default async function JobsView({
                           }}
                           isAuthenticated={Boolean(user)}
                           userRole={role ?? null}
-                          matchSignals={role === 'student' ? matchReasonsById.get(listing.id) ?? [] : []}
+                          showWhyMatch={topBestMatchIds.has(listing.id)}
+                          whyMatchReasons={whyMatchById.get(listing.id) ?? []}
                         />
                       ))}
                     </div>
@@ -711,12 +860,6 @@ export default async function JobsView({
               </div>
             ) : (
               filteredInternships.map((listing) => {
-                const matchSignals = user
-                  ? role === 'student'
-                    ? matchReasonsById.get(listing.id) ?? []
-                    : []
-                  : []
-
                 return (
                   <JobCard
                     key={listing.id}
@@ -728,7 +871,8 @@ export default async function JobsView({
                     }}
                     isAuthenticated={Boolean(user)}
                     userRole={role ?? null}
-                    matchSignals={matchSignals}
+                    showWhyMatch={topBestMatchIds.has(listing.id)}
+                    whyMatchReasons={whyMatchById.get(listing.id) ?? []}
                   />
                 )
               })

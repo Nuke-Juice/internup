@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { EMPLOYER_PLANS } from '../lib/billing/plan.ts'
+import { EMPLOYER_PLANS, getEmployerPlanFeatures } from '../lib/billing/plan.ts'
 import { resolveEmployerPlanId } from '../lib/billing/subscriptions.ts'
 
-test('plan limits are free=1, starter=3, pro=unlimited', () => {
+test('plan limits are free=1, starter=3, pro=7', () => {
   assert.equal(EMPLOYER_PLANS.free.maxActiveInternships, 1)
   assert.equal(EMPLOYER_PLANS.starter.maxActiveInternships, 3)
-  assert.equal(EMPLOYER_PLANS.pro.maxActiveInternships, null)
+  assert.equal(EMPLOYER_PLANS.pro.maxActiveInternships, 7)
 })
 
 test('price_id maps to starter/pro with backwards compatibility', () => {
@@ -40,4 +40,26 @@ test('price_id maps to starter/pro with backwards compatibility', () => {
     if (previousLegacy === undefined) delete process.env.STRIPE_PRICE_VERIFIED_EMPLOYER
     else process.env.STRIPE_PRICE_VERIFIED_EMPLOYER = previousLegacy
   }
+})
+
+test('plan feature gates enforce free < starter < pro matching capabilities', () => {
+  const free = getEmployerPlanFeatures('free')
+  const starter = getEmployerPlanFeatures('starter')
+  const pro = getEmployerPlanFeatures('pro')
+
+  assert.equal(free.rankedApplicants, false)
+  assert.equal(free.matchReasons, false)
+  assert.equal(free.advancedApplicantFilters, false)
+  assert.equal(free.readinessSignals, false)
+
+  assert.equal(starter.rankedApplicants, true)
+  assert.equal(starter.matchReasons, true)
+  assert.equal(starter.advancedApplicantFilters, false)
+  assert.equal(starter.readinessSignals, false)
+
+  assert.equal(pro.rankedApplicants, true)
+  assert.equal(pro.matchReasons, true)
+  assert.equal(pro.advancedApplicantFilters, true)
+  assert.equal(pro.readinessSignals, true)
+  assert.equal(pro.priorityPlacementInStudentFeed, true)
 })

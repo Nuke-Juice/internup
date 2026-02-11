@@ -11,6 +11,15 @@ export type EmployerPlan = {
   valueProp: string
 }
 
+export type EmployerPlanFeatures = {
+  rankedApplicants: boolean
+  matchReasons: boolean
+  readinessSignals: boolean
+  advancedApplicantFilters: boolean
+  priorityPlacementInStudentFeed: boolean
+  proEmployerTag: boolean
+}
+
 export const EMPLOYER_PLANS: Record<EmployerPlanId, EmployerPlan> = {
   free: {
     id: 'free',
@@ -32,9 +41,9 @@ export const EMPLOYER_PLANS: Record<EmployerPlanId, EmployerPlan> = {
     id: 'pro',
     name: 'Pro',
     monthlyPriceCents: 9900,
-    maxActiveInternships: null,
+    maxActiveInternships: 7,
     emailAlertsEnabled: true,
-    valueProp: 'Unlimited postings for growing teams.',
+    valueProp: 'For teams actively hiring interns.',
   },
 }
 
@@ -53,4 +62,35 @@ export function getRemainingCapacity(plan: EmployerPlan, currentActiveInternship
 
 export function isPlanLimitReachedCode(code: string | null | undefined) {
   return code === PLAN_LIMIT_REACHED
+}
+
+const EMPLOYER_PLAN_FEATURES: Record<EmployerPlanId, EmployerPlanFeatures> = {
+  free: {
+    rankedApplicants: false,
+    matchReasons: false,
+    readinessSignals: false,
+    advancedApplicantFilters: false,
+    priorityPlacementInStudentFeed: false,
+    proEmployerTag: false,
+  },
+  starter: {
+    rankedApplicants: true,
+    matchReasons: true,
+    readinessSignals: false,
+    advancedApplicantFilters: false,
+    priorityPlacementInStudentFeed: false,
+    proEmployerTag: false,
+  },
+  pro: {
+    rankedApplicants: true,
+    matchReasons: true,
+    readinessSignals: true,
+    advancedApplicantFilters: true,
+    priorityPlacementInStudentFeed: true,
+    proEmployerTag: true,
+  },
+}
+
+export function getEmployerPlanFeatures(planId: EmployerPlanId): EmployerPlanFeatures {
+  return EMPLOYER_PLAN_FEATURES[planId]
 }

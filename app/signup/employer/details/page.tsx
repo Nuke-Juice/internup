@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import { toUserFacingErrorMessage } from '@/lib/errors/userFacingError'
+import { normalizeStateCode, US_STATE_OPTIONS } from '@/lib/locations/usLocationCatalog'
 
 const FIELD =
   'mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100'
@@ -14,8 +15,43 @@ type EmployerProfileRow = {
   website: string | null
   contact_email: string | null
   industry: string | null
+  founded_date: string | null
   location: string | null
+  location_city: string | null
+  location_state: string | null
   location_address_line1: string | null
+}
+
+function parseLocation(value: string | null | undefined) {
+  const raw = (value ?? '').trim()
+  if (!raw) return { city: '', state: '' }
+  const [cityRaw, stateRaw] = raw.split(',').map((part) => part.trim())
+  return {
+    city: cityRaw ?? '',
+    state: stateRaw ?? '',
+  }
+}
+
+function resolveStateCode(value: string) {
+  const directCode = normalizeStateCode(value)
+  if (directCode) return directCode
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return ''
+  const byName = US_STATE_OPTIONS.find((option) => option.name.toLowerCase() === normalized)
+  return byName?.code ?? ''
+}
+
+function extractYear(value: string | null | undefined) {
+  if (!value) return ''
+  const match = value.match(/^(\d{4})/)
+  return match ? match[1] : ''
+}
+
+function toFoundedDateValue(year: string) {
+  const trimmed = year.trim()
+  if (!trimmed) return null
+  if (!/^\d{4}$/.test(trimmed)) return null
+  return `${trimmed}-01-01`
 }
 
 export default function EmployerSignupDetailsPage() {
@@ -27,7 +63,9 @@ export default function EmployerSignupDetailsPage() {
   const [website, setWebsite] = useState('')
   const [contactEmail, setContactEmail] = useState('')
   const [industry, setIndustry] = useState('')
-  const [location, setLocation] = useState('')
+  const [foundedYear, setFoundedYear] = useState('')
+  const [locationCity, setLocationCity] = useState('')
+  const [locationStateInput, setLocationStateInput] = useState('')
   const [address, setAddress] = useState('')
 
   const [saving, setSaving] = useState(false)
@@ -94,16 +132,19 @@ export default function EmployerSignupDetailsPage() {
 
       const { data: profile } = await supabase
         .from('employer_profiles')
-        .select('company_name, website, contact_email, industry, location, location_address_line1')
+        .select('company_name, website, contact_email, industry, founded_date, location, location_city, location_state, location_address_line1')
         .eq('user_id', user.id)
         .maybeSingle<EmployerProfileRow>()
 
       if (profile) {
+        const parsedLocation = parseLocation(profile.location)
         setCompanyName(profile.company_name ?? '')
         setWebsite(profile.website ?? '')
         setContactEmail(profile.contact_email ?? user.email ?? '')
         setIndustry(profile.industry ?? '')
-        setLocation(profile.location ?? '')
+        setFoundedYear(extractYear(profile.founded_date))
+        setLocationCity(profile.location_city ?? parsedLocation.city)
+        setLocationStateInput(profile.location_state ?? parsedLocation.state)
         setAddress(profile.location_address_line1 ?? '')
       } else {
         setContactEmail(user.email ?? '')
@@ -122,6 +163,9 @@ export default function EmployerSignupDetailsPage() {
     if (!lastName.trim()) return setError('Last name is required.')
     if (!companyName.trim()) return setError('Company name is required.')
     if (!address.trim()) return setError('Address is required.')
+    if (!locationCity.trim()) return setError('City is required.')
+    const resolvedStateCode = resolveStateCode(locationStateInput)
+    if (!resolvedStateCode) return setError('State is required. Enter a valid state code or name.')
 
     setSaving(true)
     const supabase = supabaseBrowser()
@@ -157,7 +201,8 @@ export default function EmployerSignupDetailsPage() {
     }
 
     const fullName = `${firstName.trim()} ${lastName.trim()}`.trim()
-    const [{ error: userError }, { error: profileError }, { error: authError }] = await Promise.all([
+    const foundedDateValue = toFoundedDateValue(foundedYear)
+    const [{ error: userError }, { error: profileError }, { error: publicProfileError }, { error: authError }] = await Promise.all([
       supabase.from('users').upsert(
         {
           id: user.id,
@@ -172,10 +217,26 @@ export default function EmployerSignupDetailsPage() {
           website: website.trim() || null,
           contact_email: contactEmail.trim() || user.email || null,
           industry: industry.trim() || null,
-          location: location.trim() || null,
+          founded_date: foundedDateValue,
+          location: `${locationCity.trim()}, ${resolvedStateCode}`,
+          location_city: locationCity.trim(),
+          location_state: resolvedStateCode,
           location_address_line1: address.trim(),
         },
         { onConflict: 'user_id' }
+      ),
+      supabase.from('employer_public_profiles').upsert(
+        {
+          employer_id: user.id,
+          company_name: companyName.trim(),
+          website: website.trim() || null,
+          industry: industry.trim() || null,
+          founded_date: foundedDateValue,
+          location_city: locationCity.trim(),
+          location_state: resolvedStateCode,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'employer_id' }
       ),
       supabase.auth.updateUser({
         data: {
@@ -190,6 +251,7 @@ export default function EmployerSignupDetailsPage() {
 
     if (userError) return setError(toUserFacingErrorMessage(userError.message))
     if (profileError) return setError(toUserFacingErrorMessage(profileError.message))
+    if (publicProfileError) return setError(toUserFacingErrorMessage(publicProfileError.message))
     if (authError) return setError(toUserFacingErrorMessage(authError.message))
 
     window.location.href = '/dashboard/employer'
@@ -261,14 +323,32 @@ export default function EmployerSignupDetailsPage() {
               />
             </div>
 
-            <div className="sm:col-span-2">
-              <label className="text-sm font-medium text-slate-700">Location</label>
+            <div>
+              <label className="text-sm font-medium text-slate-700">City</label>
               <input
                 className={FIELD}
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="e.g., Salt Lake City, UT"
+                value={locationCity}
+                onChange={(e) => setLocationCity(e.target.value)}
+                placeholder="e.g., Salt Lake City"
               />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-slate-700">State</label>
+              <input
+                className={FIELD}
+                value={locationStateInput}
+                onChange={(e) => setLocationStateInput(e.target.value)}
+                placeholder="UT or Utah"
+                list="state-options"
+              />
+              <datalist id="state-options">
+                {US_STATE_OPTIONS.map((option) => (
+                  <option key={option.code} value={option.code}>
+                    {option.name}
+                  </option>
+                ))}
+              </datalist>
             </div>
 
             <div className="sm:col-span-2">
@@ -299,6 +379,19 @@ export default function EmployerSignupDetailsPage() {
                 value={industry}
                 onChange={(e) => setIndustry(e.target.value)}
                 placeholder="e.g., Finance"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-slate-700">Founded year (optional)</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={4}
+                className={FIELD}
+                value={foundedYear}
+                onChange={(e) => setFoundedYear(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))}
+                placeholder="2018"
               />
             </div>
           </div>

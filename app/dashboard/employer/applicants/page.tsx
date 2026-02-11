@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 import { trackAnalyticsEvent } from '@/lib/analytics'
 import { startVerifiedEmployerCheckoutAction } from '@/lib/billing/actions'
+import { getEmployerPlanFeatures } from '@/lib/billing/plan'
 import { getEmployerVerificationStatus } from '@/lib/billing/subscriptions'
 import { requireRole } from '@/lib/auth/requireRole'
 import { supabaseServer } from '@/lib/supabase/server'
@@ -16,6 +17,8 @@ type SearchParams = Promise<{
   claimed?: string
   dismiss_claimed?: string
   internship_id?: string
+  status?: string
+  ready?: string
 }>
 
 type ApplicationStatus = 'submitted' | 'reviewing' | 'interview' | 'rejected' | 'accepted'
@@ -37,9 +40,31 @@ function normalizeSort(value: string | undefined): ApplicantsSort {
   return value === 'applied_at' ? 'applied_at' : 'match_score'
 }
 
+function normalizeSortForPlan(value: string | undefined, canSortByMatch: boolean): ApplicantsSort {
+  const requested = normalizeSort(value)
+  if (!canSortByMatch && requested === 'match_score') return 'applied_at'
+  return requested
+}
+
 function normalizeStatus(value: string | null): ApplicationStatus {
   if (value === 'reviewing' || value === 'interview' || value === 'rejected' || value === 'accepted') return value
   return 'submitted'
+}
+
+type ApplicantStatusFilter = ApplicationStatus | 'all'
+
+function normalizeStatusFilter(value: string | undefined, enabled: boolean): ApplicantStatusFilter {
+  if (!enabled) return 'all'
+  if (value === 'submitted' || value === 'reviewing' || value === 'interview' || value === 'rejected' || value === 'accepted') return value
+  return 'all'
+}
+
+type ApplicantReadinessFilter = 'all' | 'high' | 'baseline'
+
+function normalizeReadinessFilter(value: string | undefined, enabled: boolean): ApplicantReadinessFilter {
+  if (!enabled) return 'all'
+  if (value === 'high' || value === 'baseline') return value
+  return 'all'
 }
 
 function parseReasons(value: unknown) {
@@ -71,17 +96,60 @@ function canonicalMajorName(value: unknown) {
   return null
 }
 
+function toStringList(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+function buildReadinessLabel(input: {
+  hasResume: boolean
+  major: string[] | string | null | undefined
+  canonicalMajorName?: string | null
+  coursework: unknown
+  skillIds: string[]
+  availabilityHoursPerWeek: number | null
+}) {
+  const readinessChecks = [
+    input.hasResume,
+    Boolean(formatMajor(input.major, input.canonicalMajorName) && formatMajor(input.major, input.canonicalMajorName) !== 'Major not set'),
+    toStringList(input.coursework).length > 0,
+    input.skillIds.length > 0,
+    typeof input.availabilityHoursPerWeek === 'number' && input.availabilityHoursPerWeek > 0,
+  ]
+  const met = readinessChecks.filter(Boolean).length
+  return met >= 4 ? 'High readiness' : 'Baseline'
+}
+
 export default async function EmployerApplicantsPage({ searchParams }: { searchParams?: SearchParams }) {
   const { user } = await requireRole('employer')
   const resolvedSearchParams = searchParams ? await searchParams : undefined
-  const sort = normalizeSort(resolvedSearchParams?.sort)
   const selectedInternshipId = String(resolvedSearchParams?.internship_id ?? '').trim()
   const supabase = await supabaseServer()
-  const { isVerifiedEmployer } = await getEmployerVerificationStatus({ supabase, userId: user.id })
+  const { isVerifiedEmployer, planId } = await getEmployerVerificationStatus({ supabase, userId: user.id })
+  const features = getEmployerPlanFeatures(planId)
+  const sort = normalizeSortForPlan(resolvedSearchParams?.sort, features.rankedApplicants)
+  const selectedStatusFilter = normalizeStatusFilter(resolvedSearchParams?.status, features.advancedApplicantFilters)
+  const selectedReadinessFilter = normalizeReadinessFilter(resolvedSearchParams?.ready, features.advancedApplicantFilters)
   const showClaimedBanner =
     resolvedSearchParams?.claimed === '1' &&
     resolvedSearchParams?.dismiss_claimed !== '1' &&
     !isVerifiedEmployer
+  const buildSortHref = (nextSort: ApplicantsSort) => {
+    const params = new URLSearchParams()
+    params.set('sort', nextSort)
+    if (selectedInternshipId) params.set('internship_id', selectedInternshipId)
+    if (features.advancedApplicantFilters && selectedStatusFilter !== 'all') params.set('status', selectedStatusFilter)
+    if (features.advancedApplicantFilters && selectedReadinessFilter !== 'all') params.set('ready', selectedReadinessFilter)
+    return `/dashboard/employer/applicants?${params.toString()}`
+  }
 
   await trackAnalyticsEvent({
     eventName: 'employer_open_applicants_inbox',
@@ -107,6 +175,10 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
       .select('id, internship_id, student_id, created_at, match_score, match_reasons, resume_url, status, reviewed_at, notes')
       .in('internship_id', scopedInternshipIds)
 
+    if (selectedStatusFilter !== 'all') {
+      query = query.eq('status', selectedStatusFilter)
+    }
+
     if (sort === 'match_score') {
       query = query.order('match_score', { ascending: false, nullsFirst: false }).order('created_at', { ascending: false })
     } else {
@@ -122,7 +194,7 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
     studentIds.length > 0
       ? await supabase
           .from('student_profiles')
-          .select('user_id, school, major:canonical_majors(name), majors, year')
+          .select('user_id, school, major:canonical_majors(name), majors, year, coursework, availability_hours_per_week')
           .in('user_id', studentIds)
       : {
           data: [] as Array<{
@@ -131,8 +203,22 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
             major: { name?: string | null } | null
             majors: string[] | string | null
             year: string | null
+            coursework: string[] | string | null
+            availability_hours_per_week: number | null
           }>,
         }
+  const { data: studentSkillRows } =
+    studentIds.length > 0
+      ? await supabase.from('student_skill_items').select('student_id, skill_id').in('student_id', studentIds)
+      : { data: [] as Array<{ student_id: string; skill_id: string }> }
+  const skillIdsByStudent = new Map<string, string[]>()
+  for (const row of studentSkillRows ?? []) {
+    const list = skillIdsByStudent.get(row.student_id) ?? []
+    if (typeof row.skill_id === 'string' && row.skill_id.length > 0) {
+      list.push(row.skill_id)
+      skillIdsByStudent.set(row.student_id, list)
+    }
+  }
 
   const profileByStudentId = new Map(
     (profiles ?? []).map((profile) => [
@@ -141,6 +227,10 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
         school: profile.school ?? 'University not set',
         major: formatMajor(profile.majors, canonicalMajorName(profile.major)),
         year: profile.year ?? 'Grad year not set',
+        majorRaw: profile.majors,
+        canonicalMajorName: canonicalMajorName(profile.major),
+        coursework: profile.coursework ?? [],
+        availabilityHoursPerWeek: profile.availability_hours_per_week ?? null,
       },
     ])
   )
@@ -161,6 +251,14 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
       .filter((application) => application.internship_id === internship.id)
       .map((application) => {
         const profile = profileByStudentId.get(application.student_id)
+        const readinessLabel = buildReadinessLabel({
+          hasResume: Boolean(application.resume_url),
+          major: profile?.majorRaw,
+          canonicalMajorName: profile?.canonicalMajorName,
+          coursework: profile?.coursework,
+          skillIds: skillIdsByStudent.get(application.student_id) ?? [],
+          availabilityHoursPerWeek: profile?.availabilityHoursPerWeek ?? null,
+        })
         return {
           id: `${internship.id}-${application.id}`,
           applicationId: application.id,
@@ -171,11 +269,17 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
           graduationYear: profile?.year ?? 'Grad year not set',
           appliedAt: application.created_at,
           matchScore: application.match_score,
-          topReasons: parseReasons(application.match_reasons).slice(0, 2),
+          topReasons: features.matchReasons ? parseReasons(application.match_reasons).slice(0, 2) : [],
+          readinessLabel,
           resumeUrl: application.resume_url ? signedResumeUrlByPath.get(application.resume_url) ?? null : null,
           status: normalizeStatus(application.status),
           notes: application.notes ?? null,
         }
+      })
+      .filter((applicant) => {
+        if (selectedReadinessFilter === 'all') return true
+        if (selectedReadinessFilter === 'high') return applicant.readinessLabel === 'High readiness'
+        return applicant.readinessLabel !== 'High readiness'
       })
 
     return {
@@ -261,8 +365,96 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
               Review applicants by internship and move them through your hiring workflow.
             </p>
           </div>
-          <ApplicantsSortControls currentSort={sort} />
+          <ApplicantsSortControls
+            currentSort={sort}
+            canSortByMatch={features.rankedApplicants}
+            matchScoreHref={buildSortHref('match_score')}
+            appliedAtHref={buildSortHref('applied_at')}
+          />
         </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">Applicant queue</span>
+          <span
+            className={`rounded-full border px-2.5 py-1 ${
+              features.rankedApplicants
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-slate-200 bg-slate-50 text-slate-500'
+            }`}
+          >
+            Match ranking
+          </span>
+          <span
+            className={`rounded-full border px-2.5 py-1 ${
+              features.advancedApplicantFilters
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                : 'border-slate-200 bg-slate-50 text-slate-500'
+            }`}
+          >
+            Advanced filters
+          </span>
+        </div>
+
+        {features.advancedApplicantFilters ? (
+          <form className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="grid gap-3 sm:grid-cols-4">
+              <div className="sm:col-span-2">
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Internship</label>
+                <select name="internship_id" defaultValue={selectedInternshipId} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm">
+                  <option value="">All internships</option>
+                  {availableInternships.map((internship) => (
+                    <option key={internship.id} value={internship.id}>
+                      {internship.title ?? 'Internship'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status</label>
+                <select name="status" defaultValue={selectedStatusFilter} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm">
+                  <option value="all">All</option>
+                  <option value="submitted">Submitted</option>
+                  <option value="reviewing">Reviewing</option>
+                  <option value="interview">Interview</option>
+                  <option value="accepted">Accepted</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Readiness</label>
+                <select name="ready" defaultValue={selectedReadinessFilter} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm">
+                  <option value="all">All</option>
+                  <option value="high">High readiness</option>
+                  <option value="baseline">Baseline</option>
+                </select>
+              </div>
+            </div>
+            <input type="hidden" name="sort" value={sort} />
+            <div className="mt-3 flex items-center gap-2">
+              <button type="submit" className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700">
+                Apply filters
+              </button>
+              <Link href={`/dashboard/employer/applicants?sort=${encodeURIComponent(sort)}`} className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                Reset
+              </Link>
+            </div>
+          </form>
+        ) : null}
+        {!features.rankedApplicants ? (
+          <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            Upgrade to Starter for ranked applicants and match reasons.
+            <Link href="/upgrade" className="ml-2 font-semibold underline">
+              View plans
+            </Link>
+          </div>
+        ) : !features.advancedApplicantFilters ? (
+          <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            Upgrade to Pro for readiness and advanced filters.
+            <Link href="/upgrade" className="ml-2 font-semibold underline">
+              Upgrade to Pro
+            </Link>
+          </div>
+        ) : null}
 
         {resolvedSearchParams?.error ? (
           <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -277,7 +469,7 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
         {showClaimedBanner ? (
           <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p>You&rsquo;re claimed ✅ Want unlimited postings + email alerts? Upgrade to Verified Employer.</p>
+              <p>You&rsquo;re claimed ✅ Need more hiring capacity? Pro includes up to 7 active postings + email alerts.</p>
               <div className="flex flex-wrap items-center gap-2">
                 <form action={startVerifiedEmployerCheckoutAction}>
                   <button
@@ -319,6 +511,9 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
                 internshipTitle={group.internshipTitle}
                 applicants={group.applicants}
                 onUpdate={updateApplication}
+                showMatchScore={features.rankedApplicants}
+                showReasons={features.matchReasons}
+                showReadiness={features.readinessSignals}
               />
             ))}
           </div>

@@ -348,7 +348,16 @@ export default async function JobDetailPage({
                 <div className="min-w-0">
                   <h1 className="text-3xl font-semibold text-slate-900">{listing.title || 'Internship'}</h1>
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-slate-600">
-                    <span className="font-medium text-slate-800">{listing.company_name || 'Company'}</span>
+                    {listing.employer_id ? (
+                      <Link
+                        href={`/employers/${encodeURIComponent(listing.employer_id)}`}
+                        className="font-medium text-slate-800 hover:text-blue-700 hover:underline"
+                      >
+                        {listing.company_name || 'Company'}
+                      </Link>
+                    ) : (
+                      <span className="font-medium text-slate-800">{listing.company_name || 'Company'}</span>
+                    )}
                     <EmployerVerificationBadge tier={listing.employer_verification_tier ?? 'free'} />
                     <span className="text-slate-400">•</span>
                     <span>{listing.location || 'TBD'}</span>
@@ -519,7 +528,13 @@ export default async function JobDetailPage({
               <div className="mt-4 grid gap-2 rounded-lg border border-blue-100 bg-white/80 p-3 text-xs text-blue-950">
                 <div className="flex items-center justify-between">
                   <span className="text-blue-700">Company</span>
-                  <span className="font-medium">{listing.company_name || 'Company'}</span>
+                  {listing.employer_id ? (
+                    <Link href={`/employers/${encodeURIComponent(listing.employer_id)}`} className="font-medium text-blue-800 hover:underline">
+                      {listing.company_name || 'Company'}
+                    </Link>
+                  ) : (
+                    <span className="font-medium">{listing.company_name || 'Company'}</span>
+                  )}
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-blue-700">Location</span>

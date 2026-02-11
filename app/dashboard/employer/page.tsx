@@ -253,12 +253,15 @@ export default async function EmployerDashboardPage({
 
         <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
           Plan: <span className="font-semibold text-slate-900">{plan.name}</span>
-          {!isUnlimitedInternships(plan) ? ` (${plan.maxActiveInternships} active internship limit)` : ' (unlimited internships + email alerts)'}
+          {!isUnlimitedInternships(plan) ? ` (${plan.maxActiveInternships} active internship limit)` : ' (no posting cap)'}
           {`. You have ${activeInternshipsCount} active internships`}
           {remainingCapacity === null ? ' (unlimited remaining).' : ` (${remainingCapacity} remaining).`}
           <Link href="/upgrade" className="ml-2 font-medium text-blue-700 hover:underline">
             {plan.id === 'free' ? 'Upgrade' : 'Manage plan'}
           </Link>
+          <div className="mt-1 text-xs text-slate-600">
+            Free covers core posting + inbox workflow. Paid plans unlock faster hiring with ranked matching and advanced filters.
+          </div>
         </div>
 
         <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -593,7 +596,7 @@ export default async function EmployerDashboardPage({
           <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
             <h2 className="text-lg font-semibold text-slate-900">Free plan limit reached</h2>
             <p className="mt-2 text-sm text-slate-600">
-              Free employers can keep one active internship. Upgrade to Verified Employer to publish unlimited internships and receive email alerts.
+              Free employers can keep one active internship. Upgrade to Starter or Pro to publish more internships and unlock email alerts.
             </p>
             <div className="mt-5 flex flex-wrap gap-2">
               <form action={startStarterEmployerCheckoutAction}>

@@ -19,13 +19,19 @@ function formatDate(value: string | null) {
 function priceLabel(planId: EmployerPlanId) {
   const plan = EMPLOYER_PLANS[planId]
   if (plan.monthlyPriceCents === 0) return '$0/mo'
+  if (planId === 'starter') return `$${Math.round(plan.monthlyPriceCents / 100)}`
   return `$${Math.round(plan.monthlyPriceCents / 100)}/mo`
 }
 
 const PLAN_FEATURES: Record<EmployerPlanId, string[]> = {
   free: ['Max 1 active internship', 'No email alerts', 'Core matching and applicant inbox'],
-  starter: ['Max 3 active internships', 'Email alerts enabled', 'Company profile header image', 'Faster hiring loop with ranked applicants'],
-  pro: ['Unlimited active internships', 'Email alerts enabled', 'Company profile header image', 'Future: team seats + featured posts'],
+  starter: ['Max 3 active internships', 'Email alerts enabled', 'Company profile header image', 'Ranked applicants + match reasons'],
+  pro: [
+    'Up to 7 active internship postings',
+    'Priority placement in student feeds',
+    'Enhanced candidate matching (advanced filters + readiness signals)',
+    'Faster application visibility (Pro employer tag)',
+  ],
 }
 
 export default async function UpgradePage({
@@ -113,7 +119,7 @@ export default async function UpgradePage({
           </Link>
           <div>
             <h1 className="mt-2 text-3xl font-semibold text-slate-900">Choose your employer plan</h1>
-            <p className="mt-2 text-slate-600">Scale from one posting to an always-on recruiting pipeline.</p>
+            <p className="mt-2 text-slate-600">Scale from one posting to a high-signal recruiting pipeline.</p>
           </div>
         </div>
 
@@ -227,6 +233,21 @@ export default async function UpgradePage({
               </article>
             )
           })}
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <h3 className="text-base font-semibold text-slate-900">Launch model: quality over quantity</h3>
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              Free keeps the core live: basic posting capacity plus core applicant inbox workflow.
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              Starter and Pro sell speed: ranked applicants, match reasons, and faster candidate triage.
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+              Pro adds efficiency at scale: advanced filters, readiness signals, and priority student-feed placement.
+            </div>
+          </div>
         </div>
 
         <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">

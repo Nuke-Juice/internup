@@ -23,6 +23,7 @@ type SearchSuggestion = {
   label: string
   value: string
   kind: 'employer' | 'internship'
+  href: string
 }
 
 function navClasses(isActive: boolean) {
@@ -60,7 +61,6 @@ export default function SiteHeader({
   avatarUrl = null,
   isEmailVerified = true,
   showFinishProfilePrompt = false,
-  finishProfileHref = null,
 }: SiteHeaderProps) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -70,7 +70,7 @@ export default function SiteHeader({
   const [menuSearchQuery, setMenuSearchQuery] = useState('')
   const [searchSuggestions, setSearchSuggestions] = useState<SearchSuggestion[]>([])
   const [searchSuggestionsOpen, setSearchSuggestionsOpen] = useState(false)
-  const [onboardingPromptDismissed, setOnboardingPromptDismissed] = useState(false)
+  const [searchSuggestionsLoading, setSearchSuggestionsLoading] = useState(false)
   const [headerAvatarUrl, setHeaderAvatarUrl] = useState<string | null>(avatarUrl)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const { showToast } = useToast()
@@ -133,47 +133,77 @@ export default function SiteHeader({
     const query = menuSearchQuery.trim()
     if (!query) {
       setSearchSuggestions([])
+      setSearchSuggestionsLoading(false)
       return
     }
+    setSearchSuggestionsLoading(true)
 
     const timer = window.setTimeout(async () => {
       const supabase = supabaseBrowser()
-      const normalizedQuery = query.replace(/[%_]/g, '')
-      const makeRows = (items: Array<{ value: string; kind: 'employer' | 'internship' }>) => {
-        const dedup = new Map<string, SearchSuggestion>()
-        for (const item of items) {
-          const trimmed = item.value.trim()
-          if (!trimmed) continue
-          const key = `${item.kind}:${trimmed.toLowerCase()}`
-          if (!dedup.has(key)) {
-            dedup.set(key, { value: trimmed, label: trimmed, kind: item.kind })
+      try {
+        const normalizedQuery = query.replace(/[%_]/g, '')
+        if (!normalizedQuery) {
+          if (!cancelled) {
+            setSearchSuggestions([])
+            setSearchSuggestionsLoading(false)
           }
+          return
         }
-        return Array.from(dedup.values()).slice(0, 8)
-      }
+        const makeRows = (items: Array<{ value: string; kind: 'employer' | 'internship'; href: string }>) => {
+          const dedup = new Map<string, SearchSuggestion>()
+          for (const item of items) {
+            const trimmed = item.value.trim()
+            if (!trimmed) continue
+            const key = `${item.kind}:${item.href}`
+            if (!dedup.has(key)) {
+              dedup.set(key, { value: trimmed, label: trimmed, kind: item.kind, href: item.href })
+            }
+          }
+          return Array.from(dedup.values()).slice(0, 8)
+        }
 
-      const [{ data: internshipRows }, { data: employerRows }] = await Promise.all([
-        supabase
-          .from('internships')
-          .select('title')
-          .eq('is_active', true)
-          .ilike('title', `%${normalizedQuery}%`)
-          .limit(5),
-        supabase
-          .from('internships')
-          .select('company_name')
-          .eq('is_active', true)
-          .ilike('company_name', `%${normalizedQuery}%`)
-          .limit(5),
-      ])
-
-      if (cancelled) return
-      setSearchSuggestions(
-        makeRows([
-          ...(internshipRows ?? []).map((row) => ({ value: row.title ?? '', kind: 'internship' as const })),
-          ...(employerRows ?? []).map((row) => ({ value: row.company_name ?? '', kind: 'employer' as const })),
+        const [{ data: internshipRows }, { data: employerRows }] = await Promise.all([
+          supabase
+            .from('internships')
+            .select('id, title')
+            .eq('is_active', true)
+            .ilike('title', `%${normalizedQuery}%`)
+            .limit(5),
+          supabase
+            .from('employer_public_profiles')
+            .select('employer_id, company_name')
+            .ilike('company_name', `%${normalizedQuery}%`)
+            .limit(8),
         ])
-      )
+
+        if (cancelled) return
+        setSearchSuggestions(
+          makeRows([
+            ...(internshipRows ?? [])
+              .filter((row): row is { id: string; title: string | null } => typeof row.id === 'string')
+              .map((row) => ({
+                value: row.title ?? '',
+                kind: 'internship' as const,
+                href: `/jobs/${encodeURIComponent(row.id)}`,
+              })),
+            ...(employerRows ?? [])
+              .filter((row): row is { employer_id: string; company_name: string | null } => typeof row.employer_id === 'string')
+              .map((row) => ({
+                value: row.company_name ?? '',
+                kind: 'employer' as const,
+                href: `/employers/${encodeURIComponent(row.employer_id)}`,
+              })),
+          ])
+        )
+      } catch {
+        if (!cancelled) {
+          setSearchSuggestions([])
+        }
+      } finally {
+        if (!cancelled) {
+          setSearchSuggestionsLoading(false)
+        }
+      }
     }, 150)
 
     return () => {
@@ -181,16 +211,6 @@ export default function SiteHeader({
       window.clearTimeout(timer)
     }
   }, [menuSearchQuery])
-
-  useEffect(() => {
-    if (!showFinishProfilePrompt) {
-      setOnboardingPromptDismissed(false)
-      return
-    }
-    const storageKey = `finish-profile-dismissed:${email ?? 'unknown'}`
-    const dismissed = typeof window !== 'undefined' ? sessionStorage.getItem(storageKey) === '1' : false
-    setOnboardingPromptDismissed(dismissed)
-  }, [email, showFinishProfilePrompt])
 
   function submitMenuSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -202,14 +222,6 @@ export default function SiteHeader({
 
     const next = params.toString()
     router.push(next ? `/?${next}#internships` : '/#internships')
-  }
-
-  function dismissOnboardingPrompt() {
-    const storageKey = `finish-profile-dismissed:${email ?? 'unknown'}`
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem(storageKey, '1')
-    }
-    setOnboardingPromptDismissed(true)
   }
 
   async function resendVerification(nextPath: string) {
@@ -318,7 +330,9 @@ export default function SiteHeader({
                   />
                   {searchSuggestionsOpen && menuSearchQuery.trim().length > 0 ? (
                     <div className="absolute left-0 z-30 mt-1 max-h-64 w-full overflow-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
-                      {searchSuggestions.length > 0 ? (
+                      {searchSuggestionsLoading ? (
+                        <div className="px-3 py-2 text-sm text-slate-500">Searching...</div>
+                      ) : searchSuggestions.length > 0 ? (
                         searchSuggestions.map((item, index) => (
                           <button
                             key={`${item.kind}:${item.value}:${index}`}
@@ -327,6 +341,7 @@ export default function SiteHeader({
                             onClick={() => {
                               setMenuSearchQuery(item.value)
                               setSearchSuggestionsOpen(false)
+                              router.push(item.href)
                             }}
                             className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
                           >
@@ -403,7 +418,7 @@ export default function SiteHeader({
                       <User className="h-5 w-5" />
                     )}
                   </Link>
-                  {showFinishProfilePrompt && !onboardingPromptDismissed ? (
+                  {showFinishProfilePrompt ? (
                     <span className="absolute right-0 top-0 block h-2.5 w-2.5 rounded-full border border-amber-200 bg-amber-400" />
                   ) : null}
                 </div>
@@ -498,24 +513,6 @@ export default function SiteHeader({
             </div>
           ) : null}
 
-          {showFinishProfilePrompt && !onboardingPromptDismissed && finishProfileHref ? (
-            <div className="mt-2 flex items-center gap-2">
-              <Link
-                href={finishProfileHref}
-                className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
-              >
-                Finish your profile
-              </Link>
-              <button
-                type="button"
-                aria-label="Dismiss finish profile prompt"
-                onClick={dismissOnboardingPrompt}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-300 bg-white text-xs text-slate-600 hover:bg-slate-50"
-              >
-                ×
-              </button>
-            </div>
-          ) : null}
         </div>
       </header>
 
