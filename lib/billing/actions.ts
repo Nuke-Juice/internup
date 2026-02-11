@@ -10,6 +10,11 @@ function isNextRedirectError(error: unknown): error is { digest: string } {
   return typeof error.digest === 'string' && error.digest.startsWith('NEXT_REDIRECT')
 }
 
+function idempotencyKeyFor(action: 'customer' | 'checkout' | 'billing_portal', userId: string, extra = '') {
+  const bucket = Math.floor(Date.now() / (5 * 60 * 1000))
+  return `${action}:${userId}:${extra}:${bucket}`
+}
+
 async function getOrCreateStripeCustomerForUser(params: {
   userId: string
   email: string | null
@@ -37,6 +42,8 @@ async function getOrCreateStripeCustomerForUser(params: {
     metadata: {
       user_id: userId,
     },
+  }, {
+    idempotencyKey: idempotencyKeyFor('customer', userId),
   })
 
   const { error: upsertError } = await supabase.from('stripe_customers').upsert(
@@ -62,7 +69,7 @@ function priceIdForPlan(plan: PaidEmployerPlan) {
 
 export async function startEmployerCheckoutAction(plan: PaidEmployerPlan) {
   try {
-    const { user } = await requireRole('employer')
+    const { user } = await requireRole('employer', { requestedPath: '/upgrade' })
     const supabase = await supabaseServer()
     const {
       data: { user: authUser },
@@ -86,6 +93,8 @@ export async function startEmployerCheckoutAction(plan: PaidEmployerPlan) {
         plan_id: plan,
       },
       allow_promotion_codes: true,
+    }, {
+      idempotencyKey: idempotencyKeyFor('checkout', user.id, plan),
     })
 
     if (!session.url) {
@@ -120,7 +129,7 @@ export async function startVerifiedEmployerCheckoutAction() {
 
 export async function createBillingPortalSessionAction() {
   try {
-    const { user } = await requireRole('employer')
+    const { user } = await requireRole('employer', { requestedPath: '/upgrade' })
     const supabase = await supabaseServer()
     const {
       data: { user: authUser },
@@ -135,6 +144,8 @@ export async function createBillingPortalSessionAction() {
     const session = await stripe.billingPortal.sessions.create({
       customer: customerId,
       return_url: `${getAppUrl()}/upgrade`,
+    }, {
+      idempotencyKey: idempotencyKeyFor('billing_portal', user.id),
     })
 
     redirect(session.url)

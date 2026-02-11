@@ -21,6 +21,7 @@ import { hasSupabaseAdminCredentials, supabaseAdmin } from '@/lib/supabase/admin
 import { normalizeSkills } from '@/lib/skills/normalizeSkills'
 import { sanitizeSkillLabels } from '@/lib/skills/sanitizeSkillLabels'
 import { requireVerifiedEmail } from '@/lib/auth/emailVerification'
+import { validateListingForPublish } from '@/lib/listings/validateListingForPublish'
 import InternshipLocationFields from '@/components/forms/InternshipLocationFields'
 import CatalogMultiSelect from '../_components/CatalogMultiSelect'
 
@@ -77,38 +78,60 @@ function isValidCategory(value: string | null): value is InternshipCategory {
   return typeof value === 'string' && (INTERNSHIP_CATEGORIES as readonly string[]).includes(value)
 }
 
-function buildLocation(city: string, state: string, remoteAllowed: boolean) {
-  if (remoteAllowed && !city && !state) return 'Remote'
+function buildLocation(city: string, state: string, workMode: string, remoteEligibility: string) {
+  if (workMode === 'remote' && !city && !state) {
+    return remoteEligibility ? `Remote (${remoteEligibility})` : 'Remote'
+  }
   if (city && state) return `${city}, ${state}`
   if (city) return city
   if (state) return state
-  return remoteAllowed ? 'Remote' : null
+  return workMode === 'remote' ? (remoteEligibility ? `Remote (${remoteEligibility})` : 'Remote') : null
 }
 
 function validatePublishInput(params: {
   title: string
   employerId: string
   category: string | null
+  workMode: string
   startMonth: string
   startYear: string
   endMonth: string
   endYear: string
+  hoursPerWeekMin: number | null
+  hoursPerWeekMax: number | null
+  payMinHourly: number | null
+  payMaxHourly: number | null
+  payText: string | null
+  majors: string[]
+  shortSummary: string
   description: string
   locationCity: string
   locationState: string
-  remoteAllowed: boolean
 }) {
-  if (!params.title) return 'Title is required to publish'
-  if (!params.employerId) return 'Employer is required to publish'
   if (!params.category || !isValidCategory(params.category)) return 'Category is required to publish'
-  if (!params.startMonth || !params.startYear || !params.endMonth || !params.endYear) {
-    return 'Start month/year and end month/year are required to publish'
-  }
-  if (!params.description) return 'Description is required to publish'
-  if (!params.remoteAllowed && !params.locationCity && !params.locationState) {
-    return 'Location city/state or remote allowed is required to publish'
-  }
-  if (params.locationCity && params.locationState && !isVerifiedCityForState(params.locationCity, params.locationState)) {
+  const term = deriveTermFromRange(params.startMonth, params.startYear, params.endMonth, params.endYear)
+  const publishValidation = validateListingForPublish({
+    title: params.title,
+    employerId: params.employerId,
+    workMode: params.workMode,
+    locationCity: params.locationCity,
+    locationState: params.locationState,
+    payText: params.payText,
+    payMinHourly: params.payMinHourly,
+    payMaxHourly: params.payMaxHourly,
+    hoursMin: params.hoursPerWeekMin,
+    hoursMax: params.hoursPerWeekMax,
+    term,
+    majors: params.majors,
+    shortSummary: params.shortSummary,
+    description: params.description,
+  })
+  if (!publishValidation.ok) return publishValidation.code
+  if (
+    params.locationCity &&
+    params.locationState &&
+    !isVerifiedCityForState(params.locationCity, params.locationState)
+  ) {
     return 'Select a verified city and state combination'
   }
   return null
@@ -167,7 +190,7 @@ export default async function AdminInternshipEditPage({
     admin
       .from('internships')
       .select(
-        'id, title, employer_id, source, is_active, category, experience_level, location_city, location_state, remote_allowed, pay_min_hourly, pay_max_hourly, hours_per_week_min, hours_per_week_max, description, responsibilities, qualifications, majors, term, target_graduation_years, required_skills, preferred_skills, recommended_coursework, apply_deadline, admin_notes, template_used'
+        'id, title, employer_id, source, is_active, category, experience_level, work_mode, location_city, location_state, remote_allowed, remote_eligibility, pay_min_hourly, pay_max_hourly, hours_per_week_min, hours_per_week_max, short_summary, description, responsibilities, qualifications, majors, term, target_graduation_years, required_skills, preferred_skills, recommended_coursework, apply_deadline, application_deadline, admin_notes, template_used'
       )
       .eq('id', id)
       .maybeSingle(),
@@ -248,9 +271,11 @@ export default async function AdminInternshipEditPage({
     const source = normalizeSource(String(formData.get('source') ?? '').trim())
     const category = String(formData.get('category') ?? '').trim() || null
     const experienceLevel = normalizeExperience(String(formData.get('experience_level') ?? '').trim())
+    const workMode = String(formData.get('work_mode') ?? '').trim().toLowerCase()
     const locationCity = String(formData.get('location_city') ?? '').trim()
     const locationState = normalizeStateCode(String(formData.get('location_state') ?? ''))
-    const remoteAllowed = String(formData.get('remote_allowed') ?? '') === 'on'
+    const remoteAllowed = workMode === 'remote'
+    const remoteEligibility = String(formData.get('remote_eligibility') ?? '').trim()
     const payMinHourly = parseNullableNumber(formData.get('pay_min_hourly'))
     const payMaxHourly = parseNullableNumber(formData.get('pay_max_hourly'))
     const hoursPerWeekMin = parseNullableInteger(formData.get('hours_per_week_min'))
@@ -278,8 +303,13 @@ export default async function AdminInternshipEditPage({
     const customCoursework = parseJsonStringArray(formData.get('recommended_coursework_custom'))
     const customCourseworkCategories = parseJsonStringArray(formData.get('recommended_coursework_category_custom'))
     const applyDeadline = String(formData.get('apply_deadline') ?? '').trim() || null
+    const shortSummary = String(formData.get('short_summary') ?? '').trim()
     const adminNotes = String(formData.get('admin_notes') ?? '').trim() || null
     const templateUsed = String(formData.get('template_used') ?? '').trim() || null
+    const payString =
+      payMinHourly !== null || payMaxHourly !== null
+        ? `$${payMinHourly ?? payMaxHourly ?? 0}-${payMaxHourly ?? payMinHourly ?? 0}/hr`
+        : null
 
     const publishError = isDraft
       ? null
@@ -287,14 +317,21 @@ export default async function AdminInternshipEditPage({
           title,
           employerId,
           category,
+          workMode,
           startMonth,
           startYear,
           endMonth,
           endYear,
+          hoursPerWeekMin,
+          hoursPerWeekMax,
+          payMinHourly,
+          payMaxHourly,
+          payText: payString,
+          majors,
+          shortSummary,
           description,
           locationCity,
           locationState,
-          remoteAllowed,
         })
     if (publishError) {
       redirect(`/admin/internships/${internshipId}?error=${encodeURIComponent(publishError)}`)
@@ -321,11 +358,7 @@ export default async function AdminInternshipEditPage({
       redirect(`/admin/internships/${internshipId}?error=Employer+profile+not+found`)
     }
 
-    const location = buildLocation(locationCity, locationState, remoteAllowed)
-    const payString =
-      payMinHourly !== null || payMaxHourly !== null
-        ? `$${payMinHourly ?? payMaxHourly ?? 0}-${payMaxHourly ?? payMinHourly ?? 0}/hr`
-        : null
+    const location = buildLocation(locationCity, locationState, workMode, remoteEligibility)
 
     const normalizedRequiredSkills = sanitizeSkillLabels(requiredSkills).valid
     const normalizedPreferredSkills = sanitizeSkillLabels(preferredSkills).valid
@@ -507,6 +540,7 @@ export default async function AdminInternshipEditPage({
         location_city: locationCity || null,
         location_state: locationState || null,
         remote_allowed: remoteAllowed,
+        remote_eligibility: remoteEligibility || null,
         location,
         pay_min_hourly: payMinHourly,
         pay_max_hourly: payMaxHourly,
@@ -516,6 +550,7 @@ export default async function AdminInternshipEditPage({
         hours_min: hoursPerWeekMin,
         hours_max: hoursPerWeekMax,
         hours_per_week: hoursPerWeekMax ?? hoursPerWeekMin ?? null,
+        short_summary: shortSummary || null,
         description: description || null,
         majors: majors.length > 0 ? majors : null,
         term,
@@ -534,8 +569,8 @@ export default async function AdminInternshipEditPage({
         application_deadline: applyDeadline,
         admin_notes: adminNotes,
         template_used: templateUsed,
-        work_mode: remoteAllowed ? 'remote' : 'on-site',
-        location_type: remoteAllowed ? 'remote' : 'on-site',
+        work_mode: workMode || null,
+        location_type: workMode || null,
       })
       .eq('id', internshipId)
 
@@ -709,11 +744,30 @@ export default async function AdminInternshipEditPage({
                   <option value="partner">partner</option>
                 </select>
               </div>
-              <div className="flex items-end">
-                <label className="flex items-center gap-2 text-sm text-slate-700">
-                  <input type="checkbox" name="remote_allowed" defaultChecked={Boolean(internship.remote_allowed)} />
-                  Remote allowed
-                </label>
+              <div className="sm:col-span-2">
+                <label className="text-xs font-medium text-slate-700">Work mode</label>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {[
+                    { value: 'on-site', label: 'On-site' },
+                    { value: 'hybrid', label: 'Hybrid' },
+                    { value: 'remote', label: 'Remote' },
+                  ].map((option) => (
+                    <label key={option.value} className="flex items-center gap-2 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-700">
+                      <input type="radio" name="work_mode" value={option.value} defaultChecked={(internship.work_mode ?? 'hybrid') === option.value} required />
+                      {option.label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="text-xs font-medium text-slate-700">Remote eligibility (optional)</label>
+                <input
+                  type="text"
+                  name="remote_eligibility"
+                  defaultValue={internship.remote_eligibility ?? ''}
+                  className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                  placeholder="e.g., US only, Utah only"
+                />
               </div>
             </div>
 
@@ -766,6 +820,16 @@ export default async function AdminInternshipEditPage({
                   className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
                 />
               </div>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700">Short summary</label>
+              <textarea
+                name="short_summary"
+                rows={2}
+                required
+                defaultValue={internship.short_summary ?? ''}
+                className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+              />
             </div>
             <div>
               <label className="text-xs font-medium text-slate-700">Description</label>
@@ -968,6 +1032,7 @@ export default async function AdminInternshipEditPage({
               type="submit"
               name="update_mode"
               value="draft"
+              formNoValidate
               className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
             >
               Save as draft

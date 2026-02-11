@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import { resolveClientAppOrigin } from '@/lib/url/origin'
+import { normalizeAuthError } from '@/lib/auth/normalizeAuthError'
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('')
@@ -32,7 +33,8 @@ export default function ForgotPasswordPage() {
     setLoading(false)
 
     if (resetError) {
-      setError(resetError.message)
+      const normalized = normalizeAuthError(resetError, 'reset_exchange')
+      setError(normalized.publicMessage)
       return
     }
 

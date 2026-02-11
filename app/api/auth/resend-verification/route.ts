@@ -1,13 +1,7 @@
 import { NextResponse } from 'next/server'
 import { resendVerificationEmailAction } from '@/lib/auth/emailVerificationServer'
 import { supabaseServer } from '@/lib/supabase/server'
-
-function normalizeNext(value: unknown) {
-  const next = typeof value === 'string' ? value.trim() : '/'
-  if (!next.startsWith('/')) return '/'
-  if (next.startsWith('//')) return '/'
-  return next
-}
+import { normalizeNextPathOrDefault } from '@/lib/auth/nextPath'
 
 export async function POST(request: Request) {
   const supabase = await supabaseServer()
@@ -26,7 +20,9 @@ export async function POST(request: Request) {
     // no-op
   }
 
-  const next = normalizeNext(body && typeof body === 'object' && 'next' in body ? (body as { next?: unknown }).next : '/')
+  const next = normalizeNextPathOrDefault(
+    body && typeof body === 'object' && 'next' in body ? String((body as { next?: unknown }).next ?? '') : '/'
+  )
   const result = await resendVerificationEmailAction(user.email ?? '', next)
   if (!result.ok) {
     return NextResponse.json({ ok: false, error: result.error }, { status: 400 })

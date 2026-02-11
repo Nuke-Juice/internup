@@ -6,10 +6,11 @@ type Props = {
   listingId: string
   isAuthenticated: boolean
   userRole?: 'student' | 'employer' | null
+  isClosed?: boolean
   className?: string
 }
 
-export default function ApplyButton({ listingId, isAuthenticated, userRole = null, className }: Props) {
+export default function ApplyButton({ listingId, isAuthenticated, userRole = null, isClosed = false, className }: Props) {
   const buttonClassName = useMemo(
     () =>
       className ||
@@ -31,6 +32,14 @@ export default function ApplyButton({ listingId, isAuthenticated, userRole = nul
     } catch {
       // no-op
     }
+  }
+
+  if (isClosed) {
+    return (
+      <button type="button" disabled className={`${buttonClassName} cursor-not-allowed opacity-60`}>
+        Closed
+      </button>
+    )
   }
 
   if (userRole === 'employer') {

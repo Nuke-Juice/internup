@@ -6,6 +6,7 @@ type Applicant = {
   university: string
   major: string
   graduationYear: string
+  fitSummary: string
   appliedAt: string | null
   matchScore: number | null
   topReasons: string[]
@@ -68,7 +69,7 @@ export default function ApplicantsInboxGroup({
               <th className="px-4 py-3 font-medium">Applicant</th>
               <th className="px-4 py-3 font-medium">Applied</th>
               {showMatchScore ? <th className="px-4 py-3 font-medium">Match</th> : null}
-              {showReasons ? <th className="px-4 py-3 font-medium">Reasons</th> : null}
+              {showReasons ? <th className="px-4 py-3 font-medium">Why this matches</th> : null}
               {showReadiness ? <th className="px-4 py-3 font-medium">Readiness</th> : null}
               <th className="px-4 py-3 font-medium">Resume</th>
               <th className="px-4 py-3 font-medium">Status</th>
@@ -84,6 +85,7 @@ export default function ApplicantsInboxGroup({
                   <div className="mt-1 text-xs text-slate-600">
                     {applicant.university} • {applicant.major} • {applicant.graduationYear}
                   </div>
+                  <div className="mt-1 text-xs text-slate-500">{applicant.fitSummary}</div>
                 </td>
                 <td className="px-4 py-3 text-slate-700">{formatDate(applicant.appliedAt)}</td>
                 {showMatchScore ? (

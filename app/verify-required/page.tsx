@@ -4,19 +4,14 @@ import { ArrowLeft } from 'lucide-react'
 import VerifyRequiredPanel from './_components/VerifyRequiredPanel'
 import { supabaseServer } from '@/lib/supabase/server'
 import { resendVerificationEmailAction } from '@/lib/auth/emailVerificationServer'
+import { normalizeNextPathOrDefault } from '@/lib/auth/nextPath'
+import { normalizeAuthError } from '@/lib/auth/normalizeAuthError'
 
 type SearchParams = Promise<{
   next?: string
   action?: string
   email?: string
 }>
-
-function normalizeNext(value: string | undefined) {
-  const next = (value ?? '/').trim()
-  if (!next.startsWith('/')) return '/'
-  if (next.startsWith('//')) return '/'
-  return next
-}
 
 function normalizeEmailHint(value: string | undefined) {
   const email = (value ?? '').trim().toLowerCase()
@@ -28,7 +23,7 @@ function normalizeEmailHint(value: string | undefined) {
 
 export default async function VerifyRequiredPage({ searchParams }: { searchParams?: SearchParams }) {
   const resolved = searchParams ? await searchParams : undefined
-  const nextUrl = normalizeNext(resolved?.next)
+  const nextUrl = normalizeNextPathOrDefault(resolved?.next)
   const actionName = (resolved?.action ?? 'protected_action').trim() || 'protected_action'
   const hintedEmail = normalizeEmailHint(resolved?.email)
 
@@ -83,25 +78,18 @@ export default async function VerifyRequiredPage({ searchParams }: { searchParam
     )
   }
 
-  const { data: usersRow } = await supabase
-    .from('users')
-    .select('verified')
-    .eq('id', user.id)
-    .maybeSingle<{ verified: boolean | null }>()
-
-  let isVerified = usersRow?.verified === true
-  if (user.email_confirmed_at && !isVerified) {
+  if (user.email_confirmed_at) {
     const { error: verifySyncError } = await supabase
       .from('users')
       .update({ verified: true })
       .eq('id', user.id)
       .eq('verified', false)
-    if (!verifySyncError) {
-      isVerified = true
+    if (verifySyncError) {
+      console.warn('[auth] verified_sync_failed', {
+        reasonCode: 'verified_sync_failed_verify_required',
+        userId: user.id,
+      })
     }
-  }
-
-  if (user.email_confirmed_at && isVerified) {
     redirect(nextUrl)
   }
 
@@ -112,10 +100,11 @@ export default async function VerifyRequiredPage({ searchParams }: { searchParam
     'use server'
 
     const email = String(formData.get('email') ?? '')
-    const next = normalizeNext(String(formData.get('next') ?? '/'))
+    const next = normalizeNextPathOrDefault(String(formData.get('next') ?? '/'))
     const result = await resendVerificationEmailAction(email, next)
     if (!result.ok) {
-      return { ok: false, message: result.error }
+      const normalized = normalizeAuthError({ message: result.error }, 'verify')
+      return { ok: false, message: normalized.publicMessage }
     }
     return { ok: true, message: result.message }
   }

@@ -3,13 +3,9 @@ import { buildVerifyRequiredHref } from '@/lib/auth/emailVerification'
 import { hasSupabaseAdminCredentials, supabaseAdmin } from '@/lib/supabase/admin'
 import { resolvePostAuthRedirect } from '@/lib/auth/postAuthRedirect'
 import { supabaseServer } from '@/lib/supabase/server'
-
-function normalizeNext(value: string | null) {
-  const next = (value ?? '/').trim()
-  if (!next.startsWith('/')) return '/'
-  if (next.startsWith('//')) return '/'
-  return next
-}
+import { normalizeAuthError } from '@/lib/auth/normalizeAuthError'
+import { normalizeNextPathOrDefault } from '@/lib/auth/nextPath'
+import { isUserRole } from '@/lib/auth/roles'
 
 function isOtpType(value: string | null): value is 'signup' | 'email' | 'recovery' | 'invite' | 'email_change' | 'magiclink' {
   return (
@@ -23,7 +19,19 @@ function isOtpType(value: string | null): value is 'signup' | 'email' | 'recover
 }
 
 function isSignupDetailsPath(path: string) {
-  return path === '/signup/student/details' || path === '/signup/employer/details'
+  return (
+    path === '/signup/student/details' ||
+    path === '/signup/employer/details' ||
+    path.startsWith('/signup/student/details?') ||
+    path.startsWith('/signup/employer/details?')
+  )
+}
+
+function roleFromSignupDetailsPath(nextUrl: string): 'student' | 'employer' | null {
+  const next = new URL(nextUrl, 'https://app.local')
+  if (next.pathname === '/signup/student/details') return 'student'
+  if (next.pathname === '/signup/employer/details') return 'employer'
+  return null
 }
 
 function readRoleHint(nextUrl: string, userMetadata: Record<string, unknown> | null): 'student' | 'employer' | null {
@@ -35,19 +43,55 @@ function readRoleHint(nextUrl: string, userMetadata: Record<string, unknown> | n
   return null
 }
 
+function safeProvider(value: string | null) {
+  if (value === 'google' || value === 'linkedin' || value === 'linkedin_oidc') return value
+  return null
+}
+
+function loginRedirect(params: {
+  origin: string
+  message: string
+  reason: string
+  flow?: 'code' | 'otp'
+  provider?: string | null
+  next?: string | null
+}) {
+  const nextPath = normalizeNextPathOrDefault(params.next ?? null, '/')
+  const loginUrl = new URL('/login', params.origin)
+  loginUrl.searchParams.set('error', params.message)
+  loginUrl.searchParams.set('reason', params.reason)
+  if (params.flow) loginUrl.searchParams.set('flow', params.flow)
+  if (params.provider) loginUrl.searchParams.set('provider', params.provider)
+  if (nextPath !== '/') loginUrl.searchParams.set('next', nextPath)
+  return NextResponse.redirect(loginUrl)
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const code = url.searchParams.get('code')
   const tokenHash = url.searchParams.get('token_hash')
   const otpType = url.searchParams.get('type')
-  const nextUrl = normalizeNext(url.searchParams.get('next'))
+  const nextUrl = normalizeNextPathOrDefault(url.searchParams.get('next'))
+  const provider = safeProvider(url.searchParams.get('provider'))
 
   const supabase = await supabaseServer()
 
   if (code) {
     const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
     if (exchangeError) {
-      return NextResponse.redirect(new URL('/login?error=Could+not+finish+OAuth+sign-in', url.origin))
+      const normalized = normalizeAuthError(exchangeError, 'oauth')
+      console.warn('[auth] oauth_exchange_failed', {
+        reasonCode: 'oauth_exchange_failed',
+        provider,
+      })
+      return loginRedirect({
+        origin: url.origin,
+        message: normalized.publicMessage,
+        reason: 'oauth_exchange_failed',
+        flow: 'code',
+        provider,
+        next: nextUrl,
+      })
     }
   } else if (tokenHash && isOtpType(otpType)) {
     const { error: verifyError } = await supabase.auth.verifyOtp({
@@ -55,10 +99,18 @@ export async function GET(request: Request) {
       token_hash: tokenHash,
     })
     if (verifyError) {
-      const fallback = isSignupDetailsPath(nextUrl)
-        ? buildVerifyRequiredHref(nextUrl, 'signup_profile_completion')
-        : `/login?error=${encodeURIComponent('Could not verify email link')}`
-      return NextResponse.redirect(new URL(fallback, url.origin))
+      const normalized = normalizeAuthError(verifyError, 'oauth')
+      console.warn('[auth] otp_verify_failed', {
+        reasonCode: 'otp_verify_failed',
+        otpType,
+      })
+      return loginRedirect({
+        origin: url.origin,
+        message: normalized.publicMessage,
+        reason: 'otp_verify_failed',
+        flow: 'otp',
+        next: nextUrl,
+      })
     }
   }
 
@@ -69,8 +121,21 @@ export async function GET(request: Request) {
   if (user) {
     const authUser = user
     const metadata = (user.user_metadata ?? {}) as Record<string, unknown>
-    const roleHint = readRoleHint(nextUrl, metadata)
+    const hintedRole = readRoleHint(nextUrl, metadata)
+    const controlledRole = roleFromSignupDetailsPath(nextUrl)
     const admin = hasSupabaseAdminCredentials() ? supabaseAdmin() : null
+    const { data: existingUserRow } = await supabase
+      .from('users')
+      .select('id, role, verified')
+      .eq('id', authUser.id)
+      .maybeSingle<{ id: string; role: string | null; verified: boolean | null }>()
+
+    const existingRole = isUserRole(existingUserRow?.role) ? existingUserRow.role : null
+    const roleForWrite: 'student' | 'employer' | undefined = existingRole
+      ? undefined
+      : existingUserRow?.id
+        ? (controlledRole ?? undefined)
+        : (controlledRole ?? hintedRole ?? undefined)
 
     async function upsertUsersRow(role?: 'student' | 'employer') {
       const payload: { id: string; role?: 'student' | 'employer'; verified?: boolean } = { id: authUser.id }
@@ -83,20 +148,22 @@ export async function GET(request: Request) {
       return !adminResult.error
     }
 
-    if (roleHint === 'student') {
-      const wroteUser = await upsertUsersRow('student')
+    const shouldUpsert = Boolean(roleForWrite || authUser.email_confirmed_at || !existingUserRow?.id)
+    if (shouldUpsert) {
+      const wroteUser = await upsertUsersRow(roleForWrite)
       if (!wroteUser) {
-        return NextResponse.redirect(new URL('/login?error=Could+not+finish+OAuth+sign-in', url.origin))
-      }
-    } else if (roleHint === 'employer') {
-      const wroteUser = await upsertUsersRow('employer')
-      if (!wroteUser) {
-        return NextResponse.redirect(new URL('/login?error=Could+not+finish+OAuth+sign-in', url.origin))
-      }
-    } else if (authUser.email_confirmed_at) {
-      const wroteUser = await upsertUsersRow()
-      if (!wroteUser) {
-        return NextResponse.redirect(new URL('/login?error=Could+not+finish+sign-in', url.origin))
+        console.warn('[auth] users_upsert_failed', {
+          reasonCode: 'users_upsert_failed',
+          userId: authUser.id,
+        })
+        return loginRedirect({
+          origin: url.origin,
+          message: 'Could not finish OAuth sign-in.',
+          reason: 'users_upsert_failed',
+          flow: code ? 'code' : tokenHash ? 'otp' : undefined,
+          provider,
+          next: nextUrl,
+        })
       }
     }
   }
@@ -105,8 +172,15 @@ export async function GET(request: Request) {
     if (isSignupDetailsPath(nextUrl)) {
       return NextResponse.redirect(new URL(buildVerifyRequiredHref(nextUrl, 'signup_profile_completion'), url.origin))
     }
-    const loginPath = nextUrl !== '/' ? `/login?next=${encodeURIComponent(nextUrl)}` : '/login'
-    return NextResponse.redirect(new URL(loginPath, url.origin))
+    const missingReason = code || tokenHash ? 'user_missing' : 'session_missing'
+    return loginRedirect({
+      origin: url.origin,
+      message: 'Could not finish OAuth sign-in.',
+      reason: missingReason,
+      flow: code ? 'code' : tokenHash ? 'otp' : undefined,
+      provider,
+      next: nextUrl,
+    })
   }
 
   const { destination } = await resolvePostAuthRedirect({
@@ -117,7 +191,7 @@ export async function GET(request: Request) {
   })
 
   const redirectUrl = new URL(destination, url.origin)
-  if (user?.email_confirmed_at) {
+  if (user.email_confirmed_at) {
     redirectUrl.searchParams.set('verified', '1')
   }
 

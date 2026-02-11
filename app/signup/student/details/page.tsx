@@ -2,12 +2,17 @@
 
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ChevronDown } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import { getUniversityCourseCatalog, hasUniversitySpecificCourses } from '@/lib/coursework/universityCourseCatalog'
 import { normalizeCourseworkClient } from '@/lib/coursework/normalizeCourseworkClient'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import { toUserFacingErrorMessage } from '@/lib/errors/userFacingError'
-import MajorCombobox, { type CanonicalMajor } from '@/components/account/MajorCombobox'
+import type { CanonicalMajor } from '@/components/account/MajorCombobox'
+import StudentProgressBar from '@/components/onboarding/StudentProgressBar'
+import StudentStep1 from '@/components/onboarding/StudentStep1'
+import StudentStep2 from '@/components/onboarding/StudentStep2'
+import StudentStep3 from '@/components/onboarding/StudentStep3'
+import StudentStep4 from '@/components/onboarding/StudentStep4'
 
 const SCHOOL_OPTIONS = [
   'University of Utah',
@@ -37,9 +42,12 @@ const SCHOOL_OPTIONS = [
 ]
 
 const YEAR_OPTIONS = ['Freshman', 'Sophomore', 'Junior', 'Senior']
+const MAX_RESUME_BYTES = 5 * 1024 * 1024
+const STUDENT_STEPS = 4
+const STUDENT_DRAFT_KEY = 'onboarding:student:details:v2'
 
 const FIELD =
-  'mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100'
+  'mt-1 w-full rounded-md border border-slate-300 bg-white p-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100'
 
 type StudentProfileRow = {
   school: string | null
@@ -51,6 +59,27 @@ type StudentProfileRow = {
   availability_start_month: string | null
   availability_hours_per_week: number | null
   interests: string | null
+}
+
+type StudentDraft = {
+  stepIndex?: number
+  firstName?: string
+  lastName?: string
+  school?: string
+  schoolQuery?: string
+  year?: string
+  gender?: string
+  majorId?: string | null
+  majorQuery?: string
+  secondMajorId?: string | null
+  secondMajorQuery?: string
+  coursework?: string[]
+  courseworkInput?: string
+  desiredRoles?: string
+  interests?: string
+  hoursPerWeek?: string
+  preferredLocation?: string
+  preferredWorkMode?: string
 }
 
 function parseMajors(value: StudentProfileRow['majors']) {
@@ -68,8 +97,20 @@ function parseMajors(value: StudentProfileRow['majors']) {
   return []
 }
 
+function readStudentDraft() {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(STUDENT_DRAFT_KEY)
+    if (!raw) return null
+    return JSON.parse(raw) as StudentDraft
+  } catch {
+    return null
+  }
+}
+
 export default function StudentSignupDetailsPage() {
   const [initializing, setInitializing] = useState(true)
+  const [stepIndex, setStepIndex] = useState(0)
 
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
@@ -86,7 +127,13 @@ export default function StudentSignupDetailsPage() {
   const [coursework, setCoursework] = useState<string[]>([])
   const [courseworkInput, setCourseworkInput] = useState('')
   const [hoursPerWeek, setHoursPerWeek] = useState('15')
+  const [desiredRoles, setDesiredRoles] = useState('')
   const [interests, setInterests] = useState('')
+  const [preferredLocation, setPreferredLocation] = useState('')
+  const [preferredWorkMode, setPreferredWorkMode] = useState('')
+  const [resumeFile, setResumeFile] = useState<File | null>(null)
+  const [resumeStoragePath, setResumeStoragePath] = useState('')
+  const [resumeFileName, setResumeFileName] = useState('')
 
   const [majorCatalog, setMajorCatalog] = useState<CanonicalMajor[]>([])
   const [majorsLoading, setMajorsLoading] = useState(true)
@@ -94,26 +141,13 @@ export default function StudentSignupDetailsPage() {
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
   const selectedSchoolForCatalog = school || schoolQuery
-  const courseworkCatalog = useMemo(
-    () => getUniversityCourseCatalog(selectedSchoolForCatalog),
-    [selectedSchoolForCatalog]
-  )
+  const courseworkCatalog = useMemo(() => getUniversityCourseCatalog(selectedSchoolForCatalog), [selectedSchoolForCatalog])
   const hasSchoolSpecificCoursework = useMemo(
     () => hasUniversitySpecificCourses(selectedSchoolForCatalog),
     [selectedSchoolForCatalog]
   )
-
-  function addCoursework(course: string) {
-    const normalized = course.trim().replace(/\s+/g, ' ')
-    if (!normalized) return
-    setCoursework((prev) => (prev.includes(normalized) ? prev : [...prev, normalized]))
-    setCourseworkInput('')
-  }
-
-  function removeCoursework(course: string) {
-    setCoursework((prev) => prev.filter((item) => item !== course))
-  }
 
   const filteredCourseworkOptions = useMemo(() => {
     const query = courseworkInput.trim().toLowerCase()
@@ -130,6 +164,60 @@ export default function StudentSignupDetailsPage() {
 
   const showSchoolDropdown = schoolOpen && schoolQuery.trim().length > 0 && school !== schoolQuery
 
+  const currentStepNumber = stepIndex + 1
+
+  function addCoursework(course: string) {
+    const normalized = course.trim().replace(/\s+/g, ' ')
+    if (!normalized) return
+    setCoursework((prev) => (prev.includes(normalized) ? prev : [...prev, normalized]))
+    setCourseworkInput('')
+  }
+
+  function removeCoursework(course: string) {
+    setCoursework((prev) => prev.filter((item) => item !== course))
+  }
+
+  function validateStep(index: number) {
+    if (index === 0) {
+      if (!firstName.trim()) return 'First name is required.'
+      if (!lastName.trim()) return 'Last name is required.'
+      if (!school.trim()) return 'Please select your school.'
+      if (!year.trim()) return 'Please select your graduation year.'
+      if (!selectedMajor) return 'Please select a verified major.'
+      if (selectedSecondMajor && selectedSecondMajor.id === selectedMajor.id) {
+        return 'Choose a different second major or leave it blank.'
+      }
+      return null
+    }
+
+    if (index === 1) {
+      if (selectedSecondMajor && selectedMajor && selectedSecondMajor.id === selectedMajor.id) {
+        return 'Choose a different second major or leave it blank.'
+      }
+      return null
+    }
+
+    if (index === 3) {
+      const parsedHours = Number(hoursPerWeek)
+      if (!Number.isFinite(parsedHours) || parsedHours <= 0) {
+        return 'Availability hours per week must be a number greater than 0.'
+      }
+    }
+
+    return null
+  }
+
+  const canContinue = useMemo(() => {
+    if (stepIndex === 0) {
+      return Boolean(firstName.trim() && lastName.trim() && school.trim() && year.trim() && selectedMajor)
+    }
+    if (stepIndex === 3) {
+      const parsedHours = Number(hoursPerWeek)
+      return Number.isFinite(parsedHours) && parsedHours > 0
+    }
+    return true
+  }, [firstName, lastName, school, year, selectedMajor, stepIndex, hoursPerWeek])
+
   useEffect(() => {
     const supabase = supabaseBrowser()
 
@@ -144,8 +232,7 @@ export default function StudentSignupDetailsPage() {
       }
 
       if (!user.email_confirmed_at) {
-        window.location.href =
-          '/verify-required?next=%2Fsignup%2Fstudent%2Fdetails&action=signup_profile_completion'
+        window.location.href = '/verify-required?next=%2Fsignup%2Fstudent%2Fdetails&action=signup_profile_completion'
         return
       }
 
@@ -153,6 +240,8 @@ export default function StudentSignupDetailsPage() {
         first_name?: string
         last_name?: string
         full_name?: string
+        resume_path?: string
+        resume_file_name?: string
       }
       const fullNameTokens =
         typeof metadata.full_name === 'string'
@@ -162,9 +251,9 @@ export default function StudentSignupDetailsPage() {
               .filter(Boolean)
           : []
       setFirstName(typeof metadata.first_name === 'string' ? metadata.first_name : fullNameTokens[0] ?? '')
-      setLastName(
-        typeof metadata.last_name === 'string' ? metadata.last_name : fullNameTokens.slice(1).join(' ')
-      )
+      setLastName(typeof metadata.last_name === 'string' ? metadata.last_name : fullNameTokens.slice(1).join(' '))
+      setResumeStoragePath(typeof metadata.resume_path === 'string' ? metadata.resume_path : '')
+      setResumeFileName(typeof metadata.resume_file_name === 'string' ? metadata.resume_file_name : '')
 
       const [{ data: userRow }, { data: catalogData, error: catalogError }] = await Promise.all([
         supabase.from('users').select('role, verified').eq('id', user.id).maybeSingle(),
@@ -172,9 +261,7 @@ export default function StudentSignupDetailsPage() {
       ])
 
       if (userRow?.verified !== true) {
-        window.location.href =
-          '/verify-required?next=%2Fsignup%2Fstudent%2Fdetails&action=signup_profile_completion'
-        return
+        await supabase.from('users').update({ verified: true }).eq('id', user.id).eq('verified', false)
       }
 
       const role = userRow?.role
@@ -193,58 +280,95 @@ export default function StudentSignupDetailsPage() {
         )
       }
 
+      let catalog: CanonicalMajor[] = []
       if (catalogError) {
         setMajorError('Could not load majors right now.')
         setMajorsLoading(false)
       } else {
-        const catalog = (catalogData ?? []).filter(
+        catalog = (catalogData ?? []).filter(
           (row): row is CanonicalMajor =>
             typeof row.id === 'string' && typeof row.slug === 'string' && typeof row.name === 'string'
         )
         setMajorCatalog(catalog)
         setMajorsLoading(false)
+      }
 
-        const { data: profile } = await supabase
-          .from('student_profiles')
-          .select('school, gender, major_id, majors, year, coursework, availability_start_month, availability_hours_per_week, interests')
-          .eq('user_id', user.id)
-          .maybeSingle<StudentProfileRow>()
+      const { data: profile } = await supabase
+        .from('student_profiles')
+        .select('school, gender, major_id, majors, year, coursework, availability_start_month, availability_hours_per_week, interests')
+        .eq('user_id', user.id)
+        .maybeSingle<StudentProfileRow>()
 
-        if (profile) {
-          const profileMajors = parseMajors(profile.majors)
-          const hasExistingMajor = Boolean(profile.major_id) || profileMajors.length > 0
-          const profileSchool = (profile.school ?? '').trim()
-          const profileYear = (profile.year ?? '').trim()
+      if (profile) {
+        const profileMajors = parseMajors(profile.majors)
+        const hasExistingMajor = Boolean(profile.major_id) || profileMajors.length > 0
+        const profileSchool = (profile.school ?? '').trim()
+        const profileYear = (profile.year ?? '').trim()
 
-          if (hasExistingMajor && SCHOOL_OPTIONS.includes(profileSchool)) {
-            setSchool(profileSchool)
-            setSchoolQuery(profileSchool)
+        if (hasExistingMajor && SCHOOL_OPTIONS.includes(profileSchool)) {
+          setSchool(profileSchool)
+          setSchoolQuery(profileSchool)
+        }
+        if (hasExistingMajor && YEAR_OPTIONS.includes(profileYear)) {
+          setYear(profileYear)
+        }
+        setGender(profile.gender || '')
+        setCoursework(Array.isArray(profile.coursework) ? profile.coursework : [])
+        setHoursPerWeek(profile.availability_hours_per_week ? String(profile.availability_hours_per_week) : '15')
+        setInterests(profile.interests || '')
+
+        const primaryMajor =
+          profile.major_id && catalog.length > 0 ? catalog.find((item) => item.id === profile.major_id) || null : null
+        if (primaryMajor) {
+          setSelectedMajor(primaryMajor)
+          setMajorQuery(primaryMajor.name)
+        }
+
+        const majorNames = parseMajors(profile.majors)
+        const secondaryName = majorNames.find((name) => primaryMajor?.name !== name)
+        if (secondaryName) {
+          const secondaryMajor = catalog.find((item) => item.name === secondaryName) || null
+          if (secondaryMajor) {
+            setSelectedSecondMajor(secondaryMajor)
+            setSecondMajorQuery(secondaryMajor.name)
+          } else {
+            setSecondMajorQuery(secondaryName)
           }
-          if (hasExistingMajor && YEAR_OPTIONS.includes(profileYear)) {
-            setYear(profileYear)
-          }
-          setGender(profile.gender || '')
-          setCoursework(Array.isArray(profile.coursework) ? profile.coursework : [])
-          setHoursPerWeek(profile.availability_hours_per_week ? String(profile.availability_hours_per_week) : '15')
-          setInterests(profile.interests || '')
+        }
+      }
 
-          const primaryMajor =
-            profile.major_id && catalog.length > 0 ? catalog.find((item) => item.id === profile.major_id) || null : null
-          if (primaryMajor) {
-            setSelectedMajor(primaryMajor)
-            setMajorQuery(primaryMajor.name)
-          }
+      const draft = readStudentDraft()
+      if (draft) {
+        if (typeof draft.firstName === 'string') setFirstName(draft.firstName)
+        if (typeof draft.lastName === 'string') setLastName(draft.lastName)
+        if (typeof draft.school === 'string') setSchool(draft.school)
+        if (typeof draft.schoolQuery === 'string') setSchoolQuery(draft.schoolQuery)
+        if (typeof draft.year === 'string') setYear(draft.year)
+        if (typeof draft.gender === 'string') setGender(draft.gender)
+        if (typeof draft.majorQuery === 'string') setMajorQuery(draft.majorQuery)
+        if (typeof draft.secondMajorQuery === 'string') setSecondMajorQuery(draft.secondMajorQuery)
+        if (Array.isArray(draft.coursework)) setCoursework(draft.coursework)
+        if (typeof draft.courseworkInput === 'string') setCourseworkInput(draft.courseworkInput)
+        if (typeof draft.desiredRoles === 'string') setDesiredRoles(draft.desiredRoles)
+        if (typeof draft.interests === 'string') setInterests(draft.interests)
+        if (typeof draft.hoursPerWeek === 'string') setHoursPerWeek(draft.hoursPerWeek)
+        if (typeof draft.preferredLocation === 'string') setPreferredLocation(draft.preferredLocation)
+        if (typeof draft.preferredWorkMode === 'string') setPreferredWorkMode(draft.preferredWorkMode)
+        if (typeof draft.stepIndex === 'number') setStepIndex(Math.min(Math.max(draft.stepIndex, 0), STUDENT_STEPS - 1))
 
-          const majorNames = parseMajors(profile.majors)
-          const secondaryName = majorNames.find((name) => primaryMajor?.name !== name)
-          if (secondaryName) {
-            const secondaryMajor = catalog.find((item) => item.name === secondaryName) || null
-            if (secondaryMajor) {
-              setSelectedSecondMajor(secondaryMajor)
-              setSecondMajorQuery(secondaryMajor.name)
-            } else {
-              setSecondMajorQuery(secondaryName)
-            }
+        if (draft.majorId && catalog.length > 0) {
+          const draftedPrimary = catalog.find((item) => item.id === draft.majorId) || null
+          if (draftedPrimary) {
+            setSelectedMajor(draftedPrimary)
+            setMajorQuery(draftedPrimary.name)
+          }
+        }
+
+        if (draft.secondMajorId && catalog.length > 0) {
+          const draftedSecondary = catalog.find((item) => item.id === draft.secondMajorId) || null
+          if (draftedSecondary) {
+            setSelectedSecondMajor(draftedSecondary)
+            setSecondMajorQuery(draftedSecondary.name)
           }
         }
       }
@@ -255,22 +379,69 @@ export default function StudentSignupDetailsPage() {
     void initializePage()
   }, [])
 
+  useEffect(() => {
+    if (initializing || typeof window === 'undefined') return
+
+    const draft: StudentDraft = {
+      stepIndex,
+      firstName,
+      lastName,
+      school,
+      schoolQuery,
+      year,
+      gender,
+      majorId: selectedMajor?.id ?? null,
+      majorQuery,
+      secondMajorId: selectedSecondMajor?.id ?? null,
+      secondMajorQuery,
+      coursework,
+      courseworkInput,
+      desiredRoles,
+      interests,
+      hoursPerWeek,
+      preferredLocation,
+      preferredWorkMode,
+    }
+
+    window.localStorage.setItem(STUDENT_DRAFT_KEY, JSON.stringify(draft))
+  }, [
+    initializing,
+    stepIndex,
+    firstName,
+    lastName,
+    school,
+    schoolQuery,
+    year,
+    gender,
+    selectedMajor,
+    majorQuery,
+    selectedSecondMajor,
+    secondMajorQuery,
+    coursework,
+    courseworkInput,
+    desiredRoles,
+    interests,
+    hoursPerWeek,
+    preferredLocation,
+    preferredWorkMode,
+  ])
+
   async function saveProfileDetails() {
     setError(null)
 
-    if (!firstName.trim()) return setError('First name is required.')
-    if (!lastName.trim()) return setError('Last name is required.')
-    if (!school.trim()) return setError('Please select your school.')
-    if (!year.trim()) return setError('Please select your year.')
-    if (!selectedMajor) return setError('Please select a verified major.')
-    if (selectedSecondMajor && selectedSecondMajor.id === selectedMajor.id) {
-      return setError('Choose a different second major or leave it blank.')
+    const baseValidationError = validateStep(0) ?? validateStep(1) ?? validateStep(3)
+    if (baseValidationError) {
+      setError(baseValidationError)
+      return
     }
 
-    const parsedHours = Number(hoursPerWeek)
-    if (!Number.isFinite(parsedHours) || parsedHours <= 0) {
-      return setError('Availability hours per week must be a number greater than 0.')
+    if (!selectedMajor) {
+      setError('Please select a verified major.')
+      return
     }
+
+    let nextResumePath = resumeStoragePath.trim()
+    let nextResumeName = resumeFileName.trim()
 
     setSaving(true)
     const supabase = supabaseBrowser()
@@ -287,8 +458,7 @@ export default function StudentSignupDetailsPage() {
 
     if (!user.email_confirmed_at) {
       setSaving(false)
-      window.location.href =
-        '/verify-required?next=%2Fsignup%2Fstudent%2Fdetails&action=signup_profile_completion'
+      window.location.href = '/verify-required?next=%2Fsignup%2Fstudent%2Fdetails&action=signup_profile_completion'
       return
     }
 
@@ -299,10 +469,35 @@ export default function StudentSignupDetailsPage() {
       .maybeSingle<{ verified: boolean | null }>()
 
     if (usersRow?.verified !== true) {
-      setSaving(false)
-      window.location.href =
-        '/verify-required?next=%2Fsignup%2Fstudent%2Fdetails&action=signup_profile_completion'
-      return
+      await supabase.from('users').update({ verified: true }).eq('id', user.id).eq('verified', false)
+    }
+
+    if (resumeFile) {
+      if (resumeFile.type !== 'application/pdf') {
+        setSaving(false)
+        setError('Resume must be a PDF.')
+        return
+      }
+      if (resumeFile.size > MAX_RESUME_BYTES) {
+        setSaving(false)
+        setError('Resume must be 5MB or smaller.')
+        return
+      }
+
+      const sanitizedFileName = resumeFile.name.replace(/[^a-zA-Z0-9._-]/g, '-')
+      const resumePathForStorage = `profiles/${user.id}/resume-${Date.now()}-${sanitizedFileName}`
+      const { error: resumeUploadError } = await supabase.storage
+        .from('resumes')
+        .upload(resumePathForStorage, resumeFile, { contentType: 'application/pdf', upsert: true })
+
+      if (resumeUploadError) {
+        setSaving(false)
+        setError(toUserFacingErrorMessage(resumeUploadError.message))
+        return
+      }
+
+      nextResumePath = resumePathForStorage
+      nextResumeName = resumeFile.name
     }
 
     const majorNames = Array.from(
@@ -312,11 +507,11 @@ export default function StudentSignupDetailsPage() {
         )
       )
     )
-    const normalizedCourseworkList = coursework
-      .map((course) => course.trim().replace(/\s+/g, ' '))
-      .filter(Boolean)
+    const normalizedCourseworkList = coursework.map((course) => course.trim().replace(/\s+/g, ' ')).filter(Boolean)
+
     let courseworkItemIds: string[] = []
     let mappedCategoryIdsFromText: string[] = []
+
     try {
       const normalized = await normalizeCourseworkClient(normalizedCourseworkList)
       courseworkItemIds = normalized.courseworkItemIds
@@ -338,7 +533,9 @@ export default function StudentSignupDetailsPage() {
       return
     }
 
+    const parsedHours = Number(hoursPerWeek)
     const fullName = `${firstName.trim()} ${lastName.trim()}`.trim()
+
     const [{ error: userError }, { error: profileError }, { error: authError }] = await Promise.all([
       supabase.from('users').upsert(
         {
@@ -368,6 +565,8 @@ export default function StudentSignupDetailsPage() {
           first_name: firstName.trim(),
           last_name: lastName.trim(),
           full_name: fullName || null,
+          resume_path: nextResumePath || null,
+          resume_file_name: nextResumeName || null,
         },
       }),
     ])
@@ -396,10 +595,7 @@ export default function StudentSignupDetailsPage() {
 
     const [{ data: itemCategoryRows }, { error: clearCategoryLinksError }] = await Promise.all([
       courseworkItemIds.length > 0
-        ? supabase
-            .from('coursework_item_category_map')
-            .select('category_id')
-            .in('coursework_item_id', courseworkItemIds)
+        ? supabase.from('coursework_item_category_map').select('category_id').in('coursework_item_id', courseworkItemIds)
         : Promise.resolve({ data: [] as Array<{ category_id: string }> }),
       supabase.from('student_coursework_category_links').delete().eq('student_id', user.id),
     ])
@@ -423,7 +619,156 @@ export default function StudentSignupDetailsPage() {
       if (insertCategoryLinksError) return setError(toUserFacingErrorMessage(insertCategoryLinksError.message))
     }
 
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(STUDENT_DRAFT_KEY)
+    }
+
     window.location.href = '/'
+  }
+
+  function handleNext() {
+    setError(null)
+    const validationError = validateStep(stepIndex)
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+    setStepIndex((prev) => Math.min(prev + 1, STUDENT_STEPS - 1))
+  }
+
+  function handleBack() {
+    setError(null)
+    setStepIndex((prev) => Math.max(prev - 1, 0))
+  }
+
+  function handleResumeChange(file: File | null) {
+    if (!file) {
+      setResumeFile(null)
+      return
+    }
+    if (file.type !== 'application/pdf') {
+      setError('Resume must be a PDF.')
+      return
+    }
+    if (file.size > MAX_RESUME_BYTES) {
+      setError('Resume must be 5MB or smaller.')
+      return
+    }
+    setError(null)
+    setResumeFile(file)
+  }
+
+  function renderStep() {
+    if (stepIndex === 0) {
+      return (
+        <StudentStep1
+          fieldClassName={FIELD}
+          firstName={firstName}
+          lastName={lastName}
+          school={school}
+          schoolQuery={schoolQuery}
+          schoolOpen={schoolOpen}
+          year={year}
+          yearOpen={yearOpen}
+          selectedMajor={selectedMajor}
+          majorQuery={majorQuery}
+          majorCatalog={majorCatalog}
+          majorsLoading={majorsLoading}
+          majorError={majorError}
+          schoolOptions={SCHOOL_OPTIONS}
+          yearOptions={YEAR_OPTIONS}
+          filteredSchoolOptions={filteredSchoolOptions}
+          showSchoolDropdown={showSchoolDropdown}
+          onFirstNameChange={setFirstName}
+          onLastNameChange={setLastName}
+          onSchoolQueryChange={(value) => {
+            setSchoolQuery(value)
+            if (school && value.trim() !== school) {
+              setSchool('')
+            }
+          }}
+          onSchoolSelect={(value) => {
+            setSchool(value)
+            setSchoolQuery(value)
+          }}
+          onSchoolOpenChange={setSchoolOpen}
+          onYearSelect={setYear}
+          onYearOpenChange={setYearOpen}
+          onMajorQueryChange={(value) => {
+            setMajorQuery(value)
+            if (selectedMajor && value.trim() !== selectedMajor.name) {
+              setSelectedMajor(null)
+            }
+          }}
+          onMajorSelect={(major) => {
+            setSelectedMajor(major)
+            setMajorQuery(major.name)
+          }}
+          onMajorErrorClear={() => setMajorError(null)}
+        />
+      )
+    }
+
+    if (stepIndex === 1) {
+      return (
+        <StudentStep2
+          fieldClassName={FIELD}
+          secondMajorQuery={secondMajorQuery}
+          selectedSecondMajor={selectedSecondMajor}
+          majorCatalog={majorCatalog}
+          majorsLoading={majorsLoading}
+          majorError={majorError}
+          hasSchoolSpecificCoursework={hasSchoolSpecificCoursework}
+          courseworkInput={courseworkInput}
+          coursework={coursework}
+          filteredCourseworkOptions={filteredCourseworkOptions}
+          desiredRoles={desiredRoles}
+          onSecondMajorQueryChange={(value) => {
+            setSecondMajorQuery(value)
+            if (selectedSecondMajor && value.trim() !== selectedSecondMajor.name) {
+              setSelectedSecondMajor(null)
+            }
+          }}
+          onSecondMajorSelect={(major) => {
+            setSelectedSecondMajor(major)
+            setSecondMajorQuery(major.name)
+          }}
+          onMajorErrorClear={() => setMajorError(null)}
+          onCourseworkInputChange={setCourseworkInput}
+          onAddCoursework={addCoursework}
+          onRemoveCoursework={removeCoursework}
+          onDesiredRolesChange={setDesiredRoles}
+        />
+      )
+    }
+
+    if (stepIndex === 2) {
+      return (
+        <StudentStep3
+          fieldClassName={FIELD}
+          gender={gender}
+          interests={interests}
+          resumeFile={resumeFile}
+          resumeFileName={resumeFileName}
+          hasResumeOnFile={Boolean(resumeStoragePath)}
+          onGenderChange={setGender}
+          onInterestsChange={setInterests}
+          onResumeChange={handleResumeChange}
+        />
+      )
+    }
+
+    return (
+      <StudentStep4
+        fieldClassName={FIELD}
+        hoursPerWeek={hoursPerWeek}
+        preferredLocation={preferredLocation}
+        preferredWorkMode={preferredWorkMode}
+        onHoursPerWeekChange={setHoursPerWeek}
+        onPreferredLocationChange={setPreferredLocation}
+        onPreferredWorkModeChange={setPreferredWorkMode}
+      />
+    )
   }
 
   if (initializing) {
@@ -448,270 +793,68 @@ export default function StudentSignupDetailsPage() {
         </Link>
 
         <h1 className="mt-4 text-2xl font-semibold text-slate-900">Student profile details</h1>
-        <p className="mt-2 text-slate-600">Step 2 of 2: complete your profile.</p>
+        <p className="mt-2 text-slate-600">You&apos;re 2 minutes away from matching with internships.</p>
 
-        <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="grid gap-5 sm:grid-cols-2">
-            <div>
-              <label className="text-sm font-medium text-slate-700">First name</label>
-              <input
-                className={FIELD}
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
-                placeholder="Jane"
-              />
-            </div>
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <StudentProgressBar currentStep={currentStepNumber} totalSteps={STUDENT_STEPS} />
 
-            <div>
-              <label className="text-sm font-medium text-slate-700">Last name</label>
-              <input
-                className={FIELD}
-                value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
-                placeholder="Doe"
-              />
-            </div>
+          <div className="mt-6">
+            <h2 className="text-lg font-semibold text-slate-900">
+              {stepIndex === 0
+                ? 'Basics'
+                : stepIndex === 1
+                  ? 'Skills and interests'
+                  : stepIndex === 2
+                    ? 'Experience'
+                    : 'Preferences'}
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              {stepIndex === 0
+                ? 'Start with core profile details so we can personalize matches.'
+                : stepIndex === 1
+                  ? 'Add context about what you want to work on.'
+                  : stepIndex === 2
+                    ? 'A complete profile gets stronger responses from employers.'
+                    : 'Set how and where you want to intern.'}
+            </p>
+          </div>
 
-            <div>
-              <label className="text-sm font-medium text-slate-700">School</label>
-              <div className="relative">
-                <input
-                  className={FIELD}
-                  value={schoolQuery}
-                  onFocus={() => setSchoolOpen(true)}
-                  onBlur={() => {
-                    setTimeout(() => setSchoolOpen(false), 120)
-                  }}
-                  onChange={(event) => {
-                    const value = event.target.value
-                    setSchoolQuery(value)
-                    if (school && value.trim() !== school) {
-                      setSchool('')
-                    }
-                    setSchoolOpen(true)
-                  }}
-                  placeholder="Type to search school"
-                />
-                {showSchoolDropdown ? (
-                  <div className="absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-md border border-slate-200 bg-white py-1 shadow-lg">
-                    {filteredSchoolOptions.length === 0 ? (
-                      <div className="px-3 py-2 text-sm text-slate-600">No results found.</div>
-                    ) : (
-                      filteredSchoolOptions.map((option) => (
-                        <button
-                          key={option}
-                          type="button"
-                          onMouseDown={() => {
-                            setSchool(option)
-                            setSchoolQuery(option)
-                            setSchoolOpen(false)
-                          }}
-                          className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-                        >
-                          {option}
-                        </button>
-                      ))
-                    )}
-                  </div>
-                ) : null}
-              </div>
-              {!school && schoolQuery.trim().length > 0 ? (
-                <p className="mt-1 text-xs text-amber-700">Choose a school from the dropdown list.</p>
-              ) : null}
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-slate-700">Year</label>
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setYearOpen((open) => !open)}
-                  onBlur={() => setTimeout(() => setYearOpen(false), 120)}
-                  className={`${FIELD} flex items-center justify-between text-left`}
-                >
-                  <span className={year ? 'text-slate-900' : 'text-slate-400'}>{year || 'Select your year'}</span>
-                  <ChevronDown className="h-4 w-4 text-slate-500" />
-                </button>
-                {yearOpen ? (
-                  <div className="absolute z-20 mt-1 w-full overflow-auto rounded-md border border-slate-200 bg-white py-1 shadow-lg">
-                    {YEAR_OPTIONS.map((option) => (
-                      <button
-                        key={option}
-                        type="button"
-                        onMouseDown={() => {
-                          setYear(option)
-                          setYearOpen(false)
-                        }}
-                        className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-                      >
-                        {option}
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-slate-700">Gender</label>
-              <select className={FIELD} value={gender} onChange={(e) => setGender(e.target.value)}>
-                <option value="">Prefer not to say</option>
-                <option value="female">Female</option>
-                <option value="male">Male</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-slate-700">Availability hours per week</label>
-              <input
-                type="number"
-                min={1}
-                className={FIELD}
-                value={hoursPerWeek}
-                onChange={(e) => setHoursPerWeek(e.target.value)}
-                placeholder="15"
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <MajorCombobox
-                inputId="student-signup-major"
-                label="Major (primary)"
-                query={majorQuery}
-                onQueryChange={(value) => {
-                  setMajorQuery(value)
-                  if (selectedMajor && value.trim() !== selectedMajor.name) {
-                    setSelectedMajor(null)
-                  }
-                }}
-                options={majorCatalog}
-                selectedMajor={selectedMajor}
-                onSelect={(major) => {
-                  setSelectedMajor(major)
-                  setMajorQuery(major.name)
-                  setMajorError(null)
-                }}
-                loading={majorsLoading}
-                error={majorError}
-                placeholder="Start typing your major"
-              />
-              {!selectedMajor && majorQuery.trim().length > 0 ? (
-                <p className="mt-1 text-xs text-amber-700">Select a verified major from the dropdown.</p>
-              ) : null}
-            </div>
-
-            <div className="sm:col-span-2">
-              <MajorCombobox
-                inputId="student-signup-second-major"
-                label="Second major (optional)"
-                query={secondMajorQuery}
-                onQueryChange={(value) => {
-                  setSecondMajorQuery(value)
-                  if (selectedSecondMajor && value.trim() !== selectedSecondMajor.name) {
-                    setSelectedSecondMajor(null)
-                  }
-                }}
-                options={majorCatalog}
-                selectedMajor={selectedSecondMajor}
-                onSelect={(major) => {
-                  setSelectedSecondMajor(major)
-                  setSecondMajorQuery(major.name)
-                  setMajorError(null)
-                }}
-                loading={majorsLoading}
-                error={majorError}
-                placeholder="Add a second major (optional)"
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="text-sm font-medium text-slate-700">Coursework</label>
-              <p className="mt-1 text-xs text-slate-500">
-                {hasSchoolSpecificCoursework
-                  ? 'Suggestions are tuned to your selected university.'
-                  : 'Suggestions are broad until a listed university is selected.'}
-              </p>
-              <div className="mt-2 rounded-md border border-slate-300 p-2">
-                <div className="flex gap-2">
-                  <input
-                    className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
-                    value={courseworkInput}
-                    onChange={(e) => setCourseworkInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        const first = filteredCourseworkOptions[0]
-                        if (first) addCoursework(first)
-                      }
-                    }}
-                    placeholder="Search coursework and press Enter to add"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const first = filteredCourseworkOptions[0]
-                      if (first) addCoursework(first)
-                    }}
-                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
-                  >
-                    Add
-                  </button>
-                </div>
-                <div className="mt-2 max-h-40 overflow-auto rounded-md border border-slate-200">
-                  {filteredCourseworkOptions.length === 0 ? (
-                    <p className="px-3 py-2 text-sm text-slate-500">No results found.</p>
-                  ) : (
-                    filteredCourseworkOptions.map((course) => (
-                      <button
-                        key={course}
-                        type="button"
-                        onClick={() => addCoursework(course)}
-                        className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-                      >
-                        {course}
-                      </button>
-                    ))
-                  )}
-                </div>
-                {coursework.length > 0 ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {coursework.map((course) => (
-                      <button
-                        key={course}
-                        type="button"
-                        onClick={() => removeCoursework(course)}
-                        className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs text-slate-700 hover:bg-slate-100"
-                      >
-                        {course} ×
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="text-sm font-medium text-slate-700">Interests (optional)</label>
-              <textarea
-                rows={3}
-                className={FIELD}
-                value={interests}
-                onChange={(e) => setInterests(e.target.value)}
-                placeholder="What kinds of internships are you looking for?"
-              />
-            </div>
+          <div key={stepIndex} className="mt-6 transition-all duration-300 ease-out">
+            {renderStep()}
           </div>
 
           {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
 
-          <button
-            type="button"
-            onClick={saveProfileDetails}
-            disabled={saving}
-            className="mt-6 w-full rounded-md bg-blue-600 px-5 py-3 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
-          >
-            {saving ? 'Saving...' : 'Finish signup'}
-          </button>
+          <div className="mt-8 flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={handleBack}
+              disabled={stepIndex === 0 || saving}
+              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Back
+            </button>
+
+            {stepIndex < STUDENT_STEPS - 1 ? (
+              <button
+                type="button"
+                onClick={handleNext}
+                disabled={!canContinue || saving}
+                className="rounded-md bg-blue-600 px-5 py-3 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Next
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={saveProfileDetails}
+                disabled={!canContinue || saving}
+                className="rounded-md bg-blue-600 px-5 py-3 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {saving ? 'Saving...' : 'Finish signup'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </main>

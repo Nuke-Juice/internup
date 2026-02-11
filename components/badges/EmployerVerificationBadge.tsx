@@ -24,12 +24,14 @@ function classesForTier(tier: EmployerPlanId | string) {
 
 function labelForTier(tier: EmployerPlanId | string) {
   const normalized = normalizeTier(tier)
-  if (normalized === 'pro') return 'Verified Employer Pro'
-  return 'Verified Employer'
+  if (normalized === 'pro') return 'Verified Employer'
+  return ''
 }
 
 export default function EmployerVerificationBadge({ tier, className = '' }: Props) {
   const normalized = normalizeTier(tier)
+  if (normalized !== 'pro') return null
+
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${classesForTier(normalized)} ${className}`.trim()}

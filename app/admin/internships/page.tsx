@@ -62,6 +62,10 @@ type EmployerOption = {
   user_id: string
   company_name: string | null
 }
+type EmployerIdentityRow = {
+  user_id: string
+  company_name: string | null
+}
 
 type EmployerUserIdRow = { user_id: string | null }
 type CatalogSkillItem = { id: string; label: string | null }
@@ -128,6 +132,10 @@ function buildPageHref(params: { q?: string; page: number; template?: string }) 
 function toSyntheticEmployerEmail(companyName: string) {
   const slug = slugifyCatalogLabel(companyName) || 'employer'
   return `concierge+${slug}-${crypto.randomUUID().slice(0, 8)}@example.invalid`
+}
+
+function normalizeCompanyName(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase()
 }
 
 function buildLocation(city: string, state: string, remoteAllowed: boolean) {
@@ -757,6 +765,37 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       redirect(`${baseHref}${baseHref.includes('?') ? '&' : '?'}error=Contact+email+must+be+a+valid+email+address`)
     }
 
+    // Reuse existing employer to avoid creating duplicate concierge placeholder users.
+    if (contactEmail) {
+      const { data: existingByContact } = await adminWrite
+        .from('employer_profiles')
+        .select('user_id')
+        .eq('contact_email', contactEmail)
+        .limit(1)
+        .maybeSingle()
+
+      if (existingByContact?.user_id) {
+        redirect(
+          `${baseHref}${baseHref.includes('?') ? '&' : '?'}success=Employer+already+exists&new_employer_id=${encodeURIComponent(existingByContact.user_id)}`
+        )
+      }
+    }
+
+    const { data: existingByCompany } = await adminWrite
+      .from('employer_profiles')
+      .select('user_id, company_name')
+      .limit(500)
+
+    const matchedByCompany = ((existingByCompany ?? []) as EmployerIdentityRow[]).find(
+      (row: EmployerIdentityRow) => normalizeCompanyName(row.company_name) === normalizeCompanyName(companyName)
+    )
+
+    if (matchedByCompany?.user_id) {
+      redirect(
+        `${baseHref}${baseHref.includes('?') ? '&' : '?'}success=Employer+already+exists&new_employer_id=${encodeURIComponent(matchedByCompany.user_id)}`
+      )
+    }
+
     const syntheticAuthEmail = toSyntheticEmployerEmail(companyName)
     const tempPassword = `${crypto.randomUUID()}!A1`
     const { data: createdAuthUser, error: authCreateError } = await adminWrite.auth.admin.createUser({
@@ -781,6 +820,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       verified: false,
     })
     if (userInsertError) {
+      await adminWrite.auth.admin.deleteUser(employerId)
       redirect(`${baseHref}${baseHref.includes('?') ? '&' : '?'}error=${encodeURIComponent(userInsertError.message)}`)
     }
 
@@ -794,6 +834,10 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
     })
 
     if (profileInsertError) {
+      await Promise.all([
+        adminWrite.from('users').delete().eq('id', employerId),
+        adminWrite.auth.admin.deleteUser(employerId),
+      ])
       redirect(`${baseHref}${baseHref.includes('?') ? '&' : '?'}error=${encodeURIComponent(profileInsertError.message)}`)
     }
 

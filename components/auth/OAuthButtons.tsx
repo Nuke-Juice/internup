@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import { resolveClientAppOrigin } from '@/lib/url/origin'
+import { normalizeNextPath } from '@/lib/auth/nextPath'
 
 type OAuthProvider = 'google' | 'linkedin_oidc'
 
@@ -10,6 +11,7 @@ type Props = {
   roleHint?: 'student' | 'employer'
   nextPath?: string
   className?: string
+  showHelperText?: boolean
 }
 
 function providerLabel(provider: OAuthProvider) {
@@ -55,15 +57,7 @@ function LinkedInMark() {
   )
 }
 
-function normalizeNextPath(value: string | null | undefined) {
-  if (!value) return null
-  const trimmed = value.trim()
-  if (!trimmed.startsWith('/')) return null
-  if (trimmed.startsWith('//')) return null
-  return trimmed
-}
-
-export default function OAuthButtons({ roleHint, nextPath, className }: Props) {
+export default function OAuthButtons({ roleHint, nextPath, className, showHelperText = true }: Props) {
   const [loadingProvider, setLoadingProvider] = useState<OAuthProvider | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -115,9 +109,11 @@ export default function OAuthButtons({ roleHint, nextPath, className }: Props) {
         </button>
       </div>
       {error ? <p className="mt-2 text-sm text-red-600">OAuth error: {error}</p> : null}
-      <p className="mt-2 text-xs text-slate-500">
-        OAuth creates or signs into your account with {providerLabel('google')} or {providerLabel('linkedin_oidc')}, then returns here.
-      </p>
+      {showHelperText ? (
+        <p className="mt-2 text-xs text-slate-500">
+          OAuth creates or signs into your account with {providerLabel('google')} or {providerLabel('linkedin_oidc')}, then returns here.
+        </p>
+      ) : null}
     </div>
   )
 }

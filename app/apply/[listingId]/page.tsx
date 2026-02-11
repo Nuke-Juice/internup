@@ -82,8 +82,8 @@ export default async function ApplyPage({
   params: Promise<{ listingId: string }>
   searchParams?: { error?: string; code?: string; missing?: string; recovery?: string }
 }) {
-  await requireRole('student')
   const { listingId } = await params
+  await requireRole('student', { requestedPath: `/apply/${listingId}` })
   const supabase = await supabaseServer()
   const {
     data: { user: authUser },

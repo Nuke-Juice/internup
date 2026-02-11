@@ -1,8 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { ChevronDown } from 'lucide-react'
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { normalizeStateCode, US_CITY_OPTIONS, US_STATE_OPTIONS } from '@/lib/locations/usLocationCatalog'
 
 type FilterState = {
   sort: 'best_match' | 'newest'
@@ -13,14 +13,21 @@ type FilterState = {
   experience: string
   hoursMin: string
   hoursMax: string
-  locationQuery: string
+  locationCity: string
+  locationState: string
   radius: string
+}
+
+type NoMatchesHint = {
+  labels: string[]
+  clearSuggestedHref: string
+  resetAllHref: string
 }
 
 type Props = {
   categories: string[]
-  verifiedLocations: string[]
   state: FilterState
+  noMatchesHint?: NoMatchesHint | null
   basePath?: string
   anchorId?: string
 }
@@ -38,7 +45,23 @@ function parseIntOrFallback(value: string, fallback: number) {
   return Math.round(parsed)
 }
 
-export default function FiltersPanel({ categories, verifiedLocations, state, basePath = '/jobs', anchorId }: Props) {
+function normalizeCityKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function parseCityStateInput(value: string) {
+  const parts = value
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+  if (parts.length < 2) return null
+  const city = parts[0]
+  const stateCandidate = normalizeStateCode(parts[1])
+  if (!city || !stateCandidate) return null
+  return { city, state: stateCandidate }
+}
+
+export default function FiltersPanel({ categories, state, noMatchesHint, basePath = '/jobs', anchorId }: Props) {
   const initialMin = clamp(parseIntOrFallback(state.hoursMin, 10), SLIDER_MIN, SLIDER_MAX)
   const initialMax = clamp(parseIntOrFallback(state.hoursMax, 40), SLIDER_MIN, SLIDER_MAX)
 
@@ -46,9 +69,36 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
   const [hoursMaxValue, setHoursMaxValue] = useState(Math.max(initialMin, initialMax))
   const [hoursMinInput, setHoursMinInput] = useState(state.hoursMin || String(Math.min(initialMin, initialMax)))
   const [hoursMaxInput, setHoursMaxInput] = useState(state.hoursMax || String(Math.max(initialMin, initialMax)))
-  const [locationInput, setLocationInput] = useState(state.locationQuery)
-  const [locationMenuOpen, setLocationMenuOpen] = useState(false)
-  const locationBlurTimeoutRef = useRef<number | null>(null)
+  const [cityInput, setCityInput] = useState(state.locationCity)
+  const [stateInput, setStateInput] = useState(state.locationState)
+  const [stateTouched, setStateTouched] = useState(Boolean(state.locationState))
+  const [autoFilledState, setAutoFilledState] = useState<string | null>(null)
+
+  const normalizedStateInput = normalizeStateCode(stateInput)
+
+  const citySuggestions = useMemo(
+    () => Array.from(new Set(US_CITY_OPTIONS.map((option) => option.city))).sort((a, b) => a.localeCompare(b)),
+    []
+  )
+
+  const cityToStateMap = useMemo(() => {
+    const bucket = new Map<string, Set<string>>()
+    for (const option of US_CITY_OPTIONS) {
+      const key = normalizeCityKey(option.city)
+      const existing = bucket.get(key) ?? new Set<string>()
+      existing.add(option.state)
+      bucket.set(key, existing)
+    }
+
+    const resolved = new Map<string, string>()
+    for (const [key, states] of bucket.entries()) {
+      if (states.size === 1) {
+        const [singleState] = Array.from(states)
+        if (singleState) resolved.set(key, singleState)
+      }
+    }
+    return resolved
+  }, [])
 
   function href(overrides: Partial<FilterState>) {
     const merged: FilterState = { ...state, ...overrides }
@@ -62,7 +112,8 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
     if (merged.experience) params.set('exp', merged.experience)
     if (merged.hoursMin) params.set('hmin', merged.hoursMin)
     if (merged.hoursMax) params.set('hmax', merged.hoursMax)
-    if (merged.locationQuery) params.set('loc', merged.locationQuery)
+    if (merged.locationCity) params.set('city', merged.locationCity)
+    if (merged.locationState) params.set('state', normalizeStateCode(merged.locationState))
     if (merged.radius) params.set('radius', merged.radius)
 
     const query = params.toString()
@@ -106,6 +157,33 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
     setHoursMaxValue(bounded)
   }
 
+  function onCityChange(rawValue: string) {
+    setCityInput(rawValue)
+
+    const parsed = parseCityStateInput(rawValue)
+    if (parsed) {
+      setCityInput(parsed.city)
+      if (!stateTouched || !normalizedStateInput) {
+        setStateInput(parsed.state)
+        setAutoFilledState(parsed.state)
+      }
+      return
+    }
+
+    if (stateTouched || normalizedStateInput) return
+    const inferredState = cityToStateMap.get(normalizeCityKey(rawValue))
+    if (inferredState) {
+      setStateInput(inferredState)
+      setAutoFilledState(inferredState)
+    }
+  }
+
+  function onStateChange(rawValue: string) {
+    setStateTouched(true)
+    setStateInput(rawValue.toUpperCase())
+    setAutoFilledState(null)
+  }
+
   const submitAction = anchorId ? `${basePath}#${anchorId}` : basePath
 
   const sliderFillStyle = useMemo(() => {
@@ -115,12 +193,6 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
       background: `linear-gradient(to right, #d7dee8 ${minPercent}%, #3b82f6 ${minPercent}%, #1d4ed8 ${maxPercent}%, #d7dee8 ${maxPercent}%)`,
     }
   }, [hoursMinValue, hoursMaxValue])
-
-  const filteredLocations = useMemo(() => {
-    const query = locationInput.trim().toLowerCase()
-    if (!query) return verifiedLocations.slice(0, 8)
-    return verifiedLocations.filter((location) => location.toLowerCase().includes(query)).slice(0, 8)
-  }, [locationInput, verifiedLocations])
 
   return (
     <aside className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:sticky lg:top-6">
@@ -136,7 +208,8 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
             experience: '',
             hoursMin: '',
             hoursMax: '',
-            locationQuery: '',
+            locationCity: '',
+            locationState: '',
             radius: '',
           })}
           className="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
@@ -144,6 +217,21 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
           Clear
         </Link>
       </div>
+
+      {noMatchesHint ? (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <p className="font-semibold">No matches with current filters</p>
+          <p className="mt-1">Try clearing: {noMatchesHint.labels.join(', ')}</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Link href={noMatchesHint.clearSuggestedHref} className="font-medium text-amber-900 underline underline-offset-2">
+              Clear suggested filter(s)
+            </Link>
+            <Link href={noMatchesHint.resetAllHref} className="text-amber-800/90 hover:underline">
+              Reset all filters
+            </Link>
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-4 space-y-4">
         <section>
@@ -272,70 +360,45 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
           </div>
 
           <div>
-            <label htmlFor="loc" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              Location
-            </label>
-            <input type="hidden" name="loc" value={locationInput} />
-            <div className="relative mt-1">
-              <input
-                id="loc"
-                type="text"
-                value={locationInput}
-                onChange={(event) => {
-                  setLocationInput(event.target.value)
-                  setLocationMenuOpen(true)
-                }}
-                onFocus={() => {
-                  if (locationBlurTimeoutRef.current) {
-                    window.clearTimeout(locationBlurTimeoutRef.current)
-                    locationBlurTimeoutRef.current = null
-                  }
-                  setLocationMenuOpen(true)
-                }}
-                onBlur={() => {
-                  locationBlurTimeoutRef.current = window.setTimeout(() => {
-                    setLocationMenuOpen(false)
-                  }, 100)
-                }}
-                placeholder="Start typing city, state"
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 pr-9 text-sm text-slate-900 placeholder:text-slate-400"
-              />
-              <button
-                type="button"
-                aria-label="Toggle location suggestions"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => setLocationMenuOpen((open) => !open)}
-                className="absolute inset-y-0 right-0 inline-flex w-9 items-center justify-center text-slate-500 hover:text-slate-700"
-              >
-                <ChevronDown className={`h-4 w-4 transition-transform ${locationMenuOpen ? 'rotate-180' : ''}`} />
-              </button>
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Location</label>
+            <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div>
+                <input
+                  id="city"
+                  name="city"
+                  type="text"
+                  value={cityInput}
+                  onChange={(event) => onCityChange(event.target.value)}
+                  placeholder="City"
+                  list="city-options"
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400"
+                />
+                <datalist id="city-options">
+                  {citySuggestions.map((city) => (
+                    <option key={city} value={city} />
+                  ))}
+                </datalist>
+              </div>
 
-              {locationMenuOpen ? (
-                <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-md border border-slate-200 bg-white py-1 shadow-lg">
-                  {filteredLocations.length > 0 ? (
-                    filteredLocations.map((location) => (
-                      <button
-                        key={location}
-                        type="button"
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => {
-                          setLocationInput(location)
-                          setLocationMenuOpen(false)
-                        }}
-                        className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-                      >
-                        {location}
-                      </button>
-                    ))
-                  ) : (
-                    <div className="px-3 py-2 text-sm text-slate-500">No matching verified locations.</div>
-                  )}
-                </div>
-              ) : null}
+              <div>
+                <input
+                  id="state-input"
+                  type="text"
+                  value={stateInput}
+                  onChange={(event) => onStateChange(event.target.value)}
+                  placeholder="State"
+                  list="state-options"
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm uppercase text-slate-900 placeholder:text-slate-400"
+                />
+                <input type="hidden" name="state" value={normalizedStateInput} />
+                <datalist id="state-options">
+                  {US_STATE_OPTIONS.map((option) => (
+                    <option key={option.code} value={option.code}>{`${option.code} - ${option.name}`}</option>
+                  ))}
+                </datalist>
+                {autoFilledState ? <p className="mt-1 text-[11px] text-slate-500">Auto-filled {autoFilledState}</p> : null}
+              </div>
             </div>
-            <p className="mt-1 text-xs text-slate-500">
-              Choose a verified location from suggestions.
-            </p>
           </div>
 
           <div>

@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { ArrowLeft } from 'lucide-react'
 import { redirect } from 'next/navigation'
 import EmployerAccount from '@/components/account/EmployerAccount'
 import StudentAccount from '@/components/account/StudentAccount'
@@ -172,42 +173,18 @@ export default async function AccountPage() {
     .maybeSingle()
 
   const role: UserRole | null = isUserRole(userRow?.role) ? userRow.role : null
-  let isVerificationComplete = userRow?.verified === true
-  if (!isVerificationComplete && Boolean(user.email_confirmed_at)) {
+  if (Boolean(user.email_confirmed_at) && userRow?.verified !== true) {
     const { error: markVerifiedError } = await supabase
       .from('users')
       .update({ verified: true })
       .eq('id', user.id)
       .eq('verified', false)
-    if (!markVerifiedError) {
-      isVerificationComplete = true
+    if (markVerifiedError) {
+      console.warn('[auth] verified_sync_failed', {
+        reasonCode: 'verified_sync_failed_account',
+        userId: user.id,
+      })
     }
-  }
-
-  if (!isVerificationComplete) {
-    const verifyHref = `${buildVerifyRequiredHref('/account', 'signup_email_verification_pending')}&email=${encodeURIComponent(user.email ?? '')}`
-    return (
-      <main className="min-h-screen bg-white px-6 py-16">
-        <div className="mx-auto max-w-xl rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-          <h1 className="text-2xl font-semibold text-slate-900">Verification in progress</h1>
-          <p className="mt-2 text-sm text-slate-600">
-            Your email is confirmed but final verification is still processing for this account.
-          </p>
-          <div className="mt-6 flex flex-wrap gap-2">
-            <Link
-              href={verifyHref}
-              className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-            >
-              Open verification page
-            </Link>
-            <ConfirmSignOutButton
-              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              confirmMessage="Sign out and return to login?"
-            />
-          </div>
-        </div>
-      </main>
-    )
   }
 
   if (role && isAdminRole(role)) {
@@ -245,7 +222,17 @@ export default async function AccountPage() {
       .eq('id', actionUser.id)
       .maybeSingle<{ verified: boolean | null }>()
     if (verificationRow?.verified !== true) {
-      redirect(buildVerifyRequiredHref('/account', 'signup_email_verification_pending'))
+      const { error: verifySyncError } = await actionSupabase
+        .from('users')
+        .update({ verified: true })
+        .eq('id', actionUser.id)
+        .eq('verified', false)
+      if (verifySyncError) {
+        console.warn('[auth] verified_sync_failed', {
+          reasonCode: 'verified_sync_failed_account_choose_role',
+          userId: actionUser.id,
+        })
+      }
     }
 
     let finalRole: UserRole
@@ -330,7 +317,14 @@ export default async function AccountPage() {
     return (
       <main className="min-h-screen bg-slate-50 px-6 py-10">
         <div className="mx-auto max-w-5xl">
-          <div className="mb-4 flex justify-end">
+          <div className="mb-4 flex items-center justify-between">
+            <Link
+              href="/"
+              aria-label="Go back"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </Link>
             <Link
               href="/account/security"
               className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
@@ -463,7 +457,7 @@ export default async function AccountPage() {
     }
   }
 
-  const { planId } = await getEmployerVerificationStatus({ supabase, userId: user.id })
+  const { planId, isVerifiedEmployer } = await getEmployerVerificationStatus({ supabase, userId: user.id })
   const isEmailVerified = Boolean(user.email_confirmed_at)
   const metadata = (user.user_metadata ?? {}) as { first_name?: string; last_name?: string; full_name?: string }
   const fullNameTokens =
@@ -480,6 +474,15 @@ export default async function AccountPage() {
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-6xl">
+        <div className="mb-4">
+          <Link
+            href="/"
+            aria-label="Go back"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </Link>
+        </div>
         <EmployerAccount
           userId={user.id}
           userEmail={user.email ?? null}
@@ -489,6 +492,7 @@ export default async function AccountPage() {
           initialPublicProfile={publicProfileWithFallback}
           recentInternships={recentInternships}
           planId={planId}
+          isVerifiedEmployer={isVerifiedEmployer}
           isEmailVerified={isEmailVerified}
         />
       </div>

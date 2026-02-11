@@ -128,9 +128,36 @@ function buildReadinessLabel(input: {
   return met >= 4 ? 'High readiness' : 'Baseline'
 }
 
+function buildFitSummary(input: {
+  major: string
+  graduationYear: string
+  hasResume: boolean
+  topReason?: string | null
+}) {
+  const parts: string[] = []
+  if (input.major !== 'Major not set') parts.push('Major match signal')
+  if (input.graduationYear !== 'Grad year not set') parts.push('Grad year signal')
+  parts.push(input.hasResume ? 'Resume on file' : 'Resume missing')
+  if (input.topReason) parts.push(input.topReason)
+  return parts.join(' • ')
+}
+
 export default async function EmployerApplicantsPage({ searchParams }: { searchParams?: SearchParams }) {
-  const { user } = await requireRole('employer')
   const resolvedSearchParams = searchParams ? await searchParams : undefined
+  const paramsForNext = new URLSearchParams()
+  if (resolvedSearchParams?.sort) paramsForNext.set('sort', resolvedSearchParams.sort)
+  if (resolvedSearchParams?.updated) paramsForNext.set('updated', resolvedSearchParams.updated)
+  if (resolvedSearchParams?.error) paramsForNext.set('error', resolvedSearchParams.error)
+  if (resolvedSearchParams?.claimed) paramsForNext.set('claimed', resolvedSearchParams.claimed)
+  if (resolvedSearchParams?.dismiss_claimed) paramsForNext.set('dismiss_claimed', resolvedSearchParams.dismiss_claimed)
+  if (resolvedSearchParams?.internship_id) paramsForNext.set('internship_id', resolvedSearchParams.internship_id)
+  if (resolvedSearchParams?.status) paramsForNext.set('status', resolvedSearchParams.status)
+  if (resolvedSearchParams?.ready) paramsForNext.set('ready', resolvedSearchParams.ready)
+  const requestedPath =
+    paramsForNext.size > 0
+      ? `/dashboard/employer/applicants?${paramsForNext.toString()}`
+      : '/dashboard/employer/applicants'
+  const { user } = await requireRole('employer', { requestedPath })
   const selectedInternshipId = String(resolvedSearchParams?.internship_id ?? '').trim()
   const supabase = await supabaseServer()
   const { isVerifiedEmployer, planId } = await getEmployerVerificationStatus({ supabase, userId: user.id })
@@ -247,52 +274,59 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
   const groups = availableInternships
     .filter((internship) => scopedInternshipIds.includes(internship.id))
     .map((internship) => {
-    const applicants = applications
-      .filter((application) => application.internship_id === internship.id)
-      .map((application) => {
-        const profile = profileByStudentId.get(application.student_id)
-        const readinessLabel = buildReadinessLabel({
-          hasResume: Boolean(application.resume_url),
-          major: profile?.majorRaw,
-          canonicalMajorName: profile?.canonicalMajorName,
-          coursework: profile?.coursework,
-          skillIds: skillIdsByStudent.get(application.student_id) ?? [],
-          availabilityHoursPerWeek: profile?.availabilityHoursPerWeek ?? null,
+      const applicants = applications
+        .filter((application) => application.internship_id === internship.id)
+        .map((application, index) => {
+          const profile = profileByStudentId.get(application.student_id)
+          const topReasons = features.matchReasons && index < 3 ? parseReasons(application.match_reasons).slice(0, 2) : []
+          const readinessLabel = buildReadinessLabel({
+            hasResume: Boolean(application.resume_url),
+            major: profile?.majorRaw,
+            canonicalMajorName: profile?.canonicalMajorName,
+            coursework: profile?.coursework,
+            skillIds: skillIdsByStudent.get(application.student_id) ?? [],
+            availabilityHoursPerWeek: profile?.availabilityHoursPerWeek ?? null,
+          })
+          return {
+            id: `${internship.id}-${application.id}`,
+            applicationId: application.id,
+            studentId: application.student_id,
+            applicantName: applicantName(application.student_id),
+            university: profile?.school ?? 'University not set',
+            major: profile?.major ?? 'Major not set',
+            graduationYear: profile?.year ?? 'Grad year not set',
+            fitSummary: buildFitSummary({
+              major: profile?.major ?? 'Major not set',
+              graduationYear: profile?.year ?? 'Grad year not set',
+              hasResume: Boolean(application.resume_url),
+              topReason: topReasons[0] ?? null,
+            }),
+            appliedAt: application.created_at,
+            matchScore: application.match_score,
+            topReasons,
+            readinessLabel,
+            resumeUrl: application.resume_url ? signedResumeUrlByPath.get(application.resume_url) ?? null : null,
+            status: normalizeStatus(application.status),
+            notes: application.notes ?? null,
+          }
         })
-        return {
-          id: `${internship.id}-${application.id}`,
-          applicationId: application.id,
-          studentId: application.student_id,
-          applicantName: applicantName(application.student_id),
-          university: profile?.school ?? 'University not set',
-          major: profile?.major ?? 'Major not set',
-          graduationYear: profile?.year ?? 'Grad year not set',
-          appliedAt: application.created_at,
-          matchScore: application.match_score,
-          topReasons: features.matchReasons ? parseReasons(application.match_reasons).slice(0, 2) : [],
-          readinessLabel,
-          resumeUrl: application.resume_url ? signedResumeUrlByPath.get(application.resume_url) ?? null : null,
-          status: normalizeStatus(application.status),
-          notes: application.notes ?? null,
-        }
-      })
-      .filter((applicant) => {
-        if (selectedReadinessFilter === 'all') return true
-        if (selectedReadinessFilter === 'high') return applicant.readinessLabel === 'High readiness'
-        return applicant.readinessLabel !== 'High readiness'
-      })
+        .filter((applicant) => {
+          if (selectedReadinessFilter === 'all') return true
+          if (selectedReadinessFilter === 'high') return applicant.readinessLabel === 'High readiness'
+          return applicant.readinessLabel !== 'High readiness'
+        })
 
-    return {
-      internshipId: internship.id,
-      internshipTitle: internship.title ?? 'Internship',
-      applicants,
-    }
+      return {
+        internshipId: internship.id,
+        internshipTitle: internship.title ?? 'Internship',
+        applicants,
+      }
     })
 
   async function updateApplication(formData: FormData) {
     'use server'
 
-    const { user: currentUser } = await requireRole('employer')
+    const { user: currentUser } = await requireRole('employer', { requestedPath: '/dashboard/employer/applicants' })
     const applicationId = String(formData.get('application_id') ?? '').trim()
     const internshipId = String(formData.get('internship_id') ?? '').trim()
     const status = String(formData.get('status') ?? '').trim()
@@ -370,6 +404,7 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
             canSortByMatch={features.rankedApplicants}
             matchScoreHref={buildSortHref('match_score')}
             appliedAtHref={buildSortHref('applied_at')}
+            upgradeHref="/upgrade"
           />
         </div>
 
@@ -442,7 +477,7 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
         ) : null}
         {!features.rankedApplicants ? (
           <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-            Upgrade to Starter for ranked applicants and match reasons.
+            Upgrade to unlock Best Match sorting and “Why this matches” reasons.
             <Link href="/upgrade" className="ml-2 font-semibold underline">
               View plans
             </Link>

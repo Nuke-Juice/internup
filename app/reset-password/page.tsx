@@ -6,6 +6,7 @@ import { useSearchParams } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import PressRevealPasswordField from '@/components/forms/PressRevealPasswordField'
+import { normalizeAuthError } from '@/lib/auth/normalizeAuthError'
 
 function getPasswordError(password: string) {
   if (password.length < 8) return 'Password must be at least 8 characters.'
@@ -22,6 +23,7 @@ export default function ResetPasswordPage() {
   const [revealingPasswords, setRevealingPasswords] = useState(false)
   const [loading, setLoading] = useState(false)
   const [ready, setReady] = useState(false)
+  const [initializing, setInitializing] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
@@ -29,9 +31,18 @@ export default function ResetPasswordPage() {
     const supabase = supabaseBrowser()
 
     async function initialize() {
+      setInitializing(true)
+      setError(null)
       const code = searchParams.get('code')
       if (code) {
-        await supabase.auth.exchangeCodeForSession(code)
+        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
+        if (exchangeError) {
+          const normalized = normalizeAuthError(exchangeError, 'reset_exchange')
+          setError(`${normalized.publicMessage} Request a new reset link.`)
+          setReady(false)
+          setInitializing(false)
+          return
+        }
       }
 
       const {
@@ -39,6 +50,10 @@ export default function ResetPasswordPage() {
       } = await supabase.auth.getSession()
 
       setReady(Boolean(session))
+      if (!session) {
+        setError('No active reset session found. Request a new reset link.')
+      }
+      setInitializing(false)
     }
 
     void initialize()
@@ -58,7 +73,8 @@ export default function ResetPasswordPage() {
     setLoading(false)
 
     if (updateError) {
-      setError(updateError.message)
+      const normalized = normalizeAuthError(updateError, 'reset_update')
+      setError(normalized.publicMessage)
       return
     }
 
@@ -82,9 +98,13 @@ export default function ResetPasswordPage() {
         <p className="mt-2 text-slate-600">Set a new password for your account.</p>
 
         <div className="mt-6 rounded-2xl border border-slate-300 bg-white p-6 shadow-md">
-          {!ready ? (
+          {initializing ? (
             <div className="space-y-3">
-              <p className="text-sm text-slate-600">No active reset session found.</p>
+              <p className="text-sm text-slate-600">Checking reset link...</p>
+            </div>
+          ) : !ready ? (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-600">{error ?? 'No active reset session found. Request a new reset link.'}</p>
               <Link href="/forgot-password" className="text-sm font-medium text-blue-700 hover:underline">
                 Request a new reset link
               </Link>

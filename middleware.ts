@@ -2,13 +2,15 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { logAccessDecision, logRoleLookupWarning } from '@/lib/auth/devAccessLog'
 import { isAdminRole, isUserRole } from '@/lib/auth/roles'
+import { buildNextPath } from '@/lib/auth/nextPath'
 
 function redirectTo(pathname: string, request: NextRequest) {
   const url = request.nextUrl.clone()
   url.pathname = pathname
   url.search = ''
   if (pathname === '/login') {
-    url.searchParams.set('next', request.nextUrl.pathname)
+    const nextPath = buildNextPath(request.nextUrl.pathname, request.nextUrl.search)
+    url.searchParams.set('next', nextPath)
   }
   return NextResponse.redirect(url)
 }

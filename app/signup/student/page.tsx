@@ -9,6 +9,7 @@ import TurnstileWidget from '@/components/security/TurnstileWidget'
 import OAuthButtons from '@/components/auth/OAuthButtons'
 import PressRevealPasswordField from '@/components/forms/PressRevealPasswordField'
 import { resolveClientAppOrigin } from '@/lib/url/origin'
+import { normalizeNextPath } from '@/lib/auth/nextPath'
 
 const FIELD =
   'mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100'
@@ -42,12 +43,7 @@ export default function StudentSignupPage() {
     return value ? decodeURIComponent(value) : null
   }, [searchParams])
   const requestedNextPath = useMemo(() => {
-    const value = searchParams.get('next')
-    if (!value) return null
-    const trimmed = value.trim()
-    if (!trimmed.startsWith('/')) return null
-    if (trimmed.startsWith('//')) return null
-    return trimmed
+    return normalizeNextPath(searchParams.get('next'))
   }, [searchParams])
   const verifyNextPath = requestedNextPath ?? roleStep2Path
 

@@ -4,6 +4,7 @@ import { useActionState, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import { useToast } from '@/components/feedback/ToastProvider'
+import { normalizeAuthError } from '@/lib/auth/normalizeAuthError'
 
 type ResendState = {
   ok: boolean
@@ -88,6 +89,7 @@ export default function VerifyRequiredPanel({ email, nextUrl, actionName, resend
 
     const { error } = await supabase.auth.refreshSession()
     if (error) {
+      const normalized = normalizeAuthError(error, 'verify')
       if (!manual) {
         setChecking(false)
         return
@@ -103,7 +105,7 @@ export default function VerifyRequiredPanel({ email, nextUrl, actionName, resend
         })
         return
       }
-      setRefreshError(error.message)
+      setRefreshError(normalized.publicMessage)
       return
     }
 
@@ -125,20 +127,11 @@ export default function VerifyRequiredPanel({ email, nextUrl, actionName, resend
       return
     }
 
-    const { data: usersRow } = await supabase
+    await supabase
       .from('users')
-      .select('verified')
+      .update({ verified: true })
       .eq('id', user.id)
-      .maybeSingle<{ verified: boolean | null }>()
-
-    if (usersRow?.verified !== true) {
-      if (manual) {
-        setRefreshError('Verification is still processing. Use the email link, then try again.')
-      }
-      setRefreshing(false)
-      setChecking(false)
-      return
-    }
+      .eq('verified', false)
 
     setRefreshing(false)
     setChecking(false)
@@ -153,11 +146,12 @@ export default function VerifyRequiredPanel({ email, nextUrl, actionName, resend
     setSigningOut(false)
 
     if (error) {
-      setRefreshError(error.message)
+      const normalized = normalizeAuthError(error, 'verify')
+      setRefreshError(normalized.publicMessage)
       showToast({
         kind: 'error',
-        message: error.message,
-        key: `verify-signout-error:${error.message}`,
+        message: normalized.publicMessage,
+        key: `verify-signout-error:${normalized.reasonCode}`,
       })
       return
     }

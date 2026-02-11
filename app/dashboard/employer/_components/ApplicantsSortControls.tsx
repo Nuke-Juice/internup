@@ -7,6 +7,7 @@ type Props = {
   canSortByMatch: boolean
   matchScoreHref: string
   appliedAtHref: string
+  upgradeHref: string
 }
 
 function buttonClass(active: boolean) {
@@ -17,17 +18,27 @@ function buttonClass(active: boolean) {
   }`
 }
 
-export default function ApplicantsSortControls({ currentSort, canSortByMatch, matchScoreHref, appliedAtHref }: Props) {
+export default function ApplicantsSortControls({
+  currentSort,
+  canSortByMatch,
+  matchScoreHref,
+  appliedAtHref,
+  upgradeHref,
+}: Props) {
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Sort</span>
       {canSortByMatch ? (
         <Link href={matchScoreHref} className={buttonClass(currentSort === 'match_score')}>
-          Match score
+          Best match
         </Link>
-      ) : null}
+      ) : (
+        <Link href={upgradeHref} className={buttonClass(false)}>
+          Best match (upgrade)
+        </Link>
+      )}
       <Link href={appliedAtHref} className={buttonClass(currentSort === 'applied_at')}>
-        Applied date
+        Newest
       </Link>
     </div>
   )

@@ -57,7 +57,7 @@ function parseReasons(value: unknown) {
 }
 
 export default async function ApplicationsPage() {
-  const { user } = await requireRole('student')
+  const { user } = await requireRole('student', { requestedPath: '/applications' })
   const supabase = await supabaseServer()
 
   const { data: applications } = await supabase

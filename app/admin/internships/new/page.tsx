@@ -20,6 +20,7 @@ import { isVerifiedCityForState, normalizeStateCode } from '@/lib/locations/usLo
 import { normalizeSkills } from '@/lib/skills/normalizeSkills'
 import { sanitizeSkillLabels } from '@/lib/skills/sanitizeSkillLabels'
 import { requireVerifiedEmail } from '@/lib/auth/emailVerification'
+import { validateListingForPublish } from '@/lib/listings/validateListingForPublish'
 import InternshipLocationFields from '@/components/forms/InternshipLocationFields'
 import CatalogMultiSelect from '../_components/CatalogMultiSelect'
 import TemplatePicker from '../_components/TemplatePicker'
@@ -59,6 +60,10 @@ type InternshipAdminRow = {
 }
 
 type EmployerOption = {
+  user_id: string
+  company_name: string | null
+}
+type EmployerIdentityRow = {
   user_id: string
   company_name: string | null
 }
@@ -130,38 +135,64 @@ function toSyntheticEmployerEmail(companyName: string) {
   return `concierge+${slug}-${crypto.randomUUID().slice(0, 8)}@example.invalid`
 }
 
-function buildLocation(city: string, state: string, remoteAllowed: boolean) {
-  if (remoteAllowed && !city && !state) return 'Remote'
+function normalizeCompanyName(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase()
+}
+
+function buildLocation(city: string, state: string, workMode: string, remoteEligibility: string) {
+  if (workMode === 'remote' && !city && !state) {
+    return remoteEligibility ? `Remote (${remoteEligibility})` : 'Remote'
+  }
   if (city && state) return `${city}, ${state}`
   if (city) return city
   if (state) return state
-  return remoteAllowed ? 'Remote' : null
+  return workMode === 'remote' ? (remoteEligibility ? `Remote (${remoteEligibility})` : 'Remote') : null
 }
 
 function validatePublishInput(params: {
   title: string
   employerId: string
   category: string | null
+  workMode: string
   startMonth: string
   startYear: string
   endMonth: string
   endYear: string
+  hoursPerWeekMin: number | null
+  hoursPerWeekMax: number | null
+  payMinHourly: number | null
+  payMaxHourly: number | null
+  payText: string | null
+  majors: string[]
+  shortSummary: string
   description: string
   locationCity: string
   locationState: string
-  remoteAllowed: boolean
 }) {
-  if (!params.title) return 'Title is required to publish'
-  if (!params.employerId) return 'Employer is required to publish'
   if (!params.category || !isValidCategory(params.category)) return 'Category is required to publish'
-  if (!params.startMonth || !params.startYear || !params.endMonth || !params.endYear) {
-    return 'Start month/year and end month/year are required to publish'
-  }
-  if (!params.description) return 'Description is required to publish'
-  if (!params.remoteAllowed && !params.locationCity && !params.locationState) {
-    return 'Location city/state or remote allowed is required to publish'
-  }
-  if (params.locationCity && params.locationState && !isVerifiedCityForState(params.locationCity, params.locationState)) {
+  const term = deriveTermFromRange(params.startMonth, params.startYear, params.endMonth, params.endYear)
+  const publishValidation = validateListingForPublish({
+    title: params.title,
+    employerId: params.employerId,
+    workMode: params.workMode,
+    locationCity: params.locationCity,
+    locationState: params.locationState,
+    payText: params.payText,
+    payMinHourly: params.payMinHourly,
+    payMaxHourly: params.payMaxHourly,
+    hoursMin: params.hoursPerWeekMin,
+    hoursMax: params.hoursPerWeekMax,
+    term,
+    majors: params.majors,
+    shortSummary: params.shortSummary,
+    description: params.description,
+  })
+  if (!publishValidation.ok) return publishValidation.code
+  if (
+    params.locationCity &&
+    params.locationState &&
+    !isVerifiedCityForState(params.locationCity, params.locationState)
+  ) {
     return 'Select a verified city and state combination'
   }
   return null
@@ -356,9 +387,11 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
     const source = normalizeSource(String(formData.get('source') ?? '').trim())
     const category = String(formData.get('category') ?? '').trim() || null
     const experienceLevel = normalizeExperience(String(formData.get('experience_level') ?? '').trim())
+    const workMode = String(formData.get('work_mode') ?? '').trim().toLowerCase()
     const locationCity = String(formData.get('location_city') ?? '').trim()
     const locationState = normalizeStateCode(String(formData.get('location_state') ?? ''))
-    const remoteAllowed = String(formData.get('remote_allowed') ?? '') === 'on'
+    const remoteAllowed = workMode === 'remote'
+    const remoteEligibility = String(formData.get('remote_eligibility') ?? '').trim()
     const payMinHourly = parseNullableNumber(formData.get('pay_min_hourly'))
     const payMaxHourly = parseNullableNumber(formData.get('pay_max_hourly'))
     const hoursPerWeekMin = parseNullableInteger(formData.get('hours_per_week_min'))
@@ -386,8 +419,13 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
     const customCoursework = parseJsonStringArray(formData.get('recommended_coursework_custom'))
     const customCourseworkCategories = parseJsonStringArray(formData.get('recommended_coursework_category_custom'))
     const applyDeadline = String(formData.get('apply_deadline') ?? '').trim() || null
+    const shortSummary = String(formData.get('short_summary') ?? '').trim()
     const adminNotes = String(formData.get('admin_notes') ?? '').trim() || null
     const templateUsed = String(formData.get('template_used') ?? '').trim() || null
+    const payString =
+      payMinHourly !== null || payMaxHourly !== null
+        ? `$${payMinHourly ?? payMaxHourly ?? 0}-${payMaxHourly ?? payMinHourly ?? 0}/hr`
+        : null
 
     const publishError = isDraft
       ? null
@@ -395,14 +433,21 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
           title,
           employerId,
           category,
+          workMode,
           startMonth,
           startYear,
           endMonth,
           endYear,
+          hoursPerWeekMin,
+          hoursPerWeekMax,
+          payMinHourly,
+          payMaxHourly,
+          payText: payString,
+          majors,
+          shortSummary,
           description,
           locationCity,
           locationState,
-          remoteAllowed,
         })
 
     if (publishError) {
@@ -430,11 +475,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       redirect('/admin/internships/new?error=Employer+profile+not+found')
     }
 
-    const location = buildLocation(locationCity, locationState, remoteAllowed)
-    const payString =
-      payMinHourly !== null || payMaxHourly !== null
-        ? `$${payMinHourly ?? payMaxHourly ?? 0}-${payMaxHourly ?? payMinHourly ?? 0}/hr`
-        : null
+    const location = buildLocation(locationCity, locationState, workMode, remoteEligibility)
 
     const normalizedRequiredSkills = sanitizeSkillLabels(requiredSkills).valid
     const normalizedPreferredSkills = sanitizeSkillLabels(preferredSkills).valid
@@ -631,6 +672,8 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       hours_max: hoursPerWeekMax,
       hours_per_week: hoursPerWeekMax ?? hoursPerWeekMin ?? null,
       description: description || null,
+      short_summary: shortSummary || null,
+      remote_eligibility: remoteEligibility || null,
       majors: majors.length > 0 ? majors : null,
       term,
       target_graduation_years: targetGraduationYears.length > 0 ? targetGraduationYears : null,
@@ -648,8 +691,8 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       application_deadline: applyDeadline,
       admin_notes: adminNotes,
       template_used: templateUsed,
-      work_mode: remoteAllowed ? 'remote' : 'on-site',
-      location_type: remoteAllowed ? 'remote' : 'on-site',
+      work_mode: workMode || null,
+      location_type: workMode || null,
     })
       .select('id')
       .single()
@@ -736,6 +779,37 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       redirect(`${baseHref}${baseHref.includes('?') ? '&' : '?'}error=Contact+email+must+be+a+valid+email+address`)
     }
 
+    // Reuse existing employer to avoid creating duplicate concierge placeholder users.
+    if (contactEmail) {
+      const { data: existingByContact } = await adminWrite
+        .from('employer_profiles')
+        .select('user_id')
+        .eq('contact_email', contactEmail)
+        .limit(1)
+        .maybeSingle()
+
+      if (existingByContact?.user_id) {
+        redirect(
+          `${baseHref}${baseHref.includes('?') ? '&' : '?'}success=Employer+already+exists&new_employer_id=${encodeURIComponent(existingByContact.user_id)}`
+        )
+      }
+    }
+
+    const { data: existingByCompany } = await adminWrite
+      .from('employer_profiles')
+      .select('user_id, company_name')
+      .limit(500)
+
+    const matchedByCompany = ((existingByCompany ?? []) as EmployerIdentityRow[]).find(
+      (row: EmployerIdentityRow) => normalizeCompanyName(row.company_name) === normalizeCompanyName(companyName)
+    )
+
+    if (matchedByCompany?.user_id) {
+      redirect(
+        `${baseHref}${baseHref.includes('?') ? '&' : '?'}success=Employer+already+exists&new_employer_id=${encodeURIComponent(matchedByCompany.user_id)}`
+      )
+    }
+
     const syntheticAuthEmail = toSyntheticEmployerEmail(companyName)
     const tempPassword = `${crypto.randomUUID()}!A1`
     const { data: createdAuthUser, error: authCreateError } = await adminWrite.auth.admin.createUser({
@@ -760,6 +834,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       verified: false,
     })
     if (userInsertError) {
+      await adminWrite.auth.admin.deleteUser(employerId)
       redirect(`${baseHref}${baseHref.includes('?') ? '&' : '?'}error=${encodeURIComponent(userInsertError.message)}`)
     }
 
@@ -773,6 +848,10 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
     })
 
     if (profileInsertError) {
+      await Promise.all([
+        adminWrite.from('users').delete().eq('id', employerId),
+        adminWrite.auth.admin.deleteUser(employerId),
+      ])
       redirect(`${baseHref}${baseHref.includes('?') ? '&' : '?'}error=${encodeURIComponent(profileInsertError.message)}`)
     }
 
@@ -1025,11 +1104,29 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
               <details className="rounded-xl border border-slate-200 bg-white">
                 <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">Location</summary>
                 <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
-                  <div className="flex items-center">
-                    <label className="flex items-center gap-2 text-sm text-slate-700">
-                      <input type="checkbox" name="remote_allowed" defaultChecked />
-                      Remote allowed
-                    </label>
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Work mode</label>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      {[
+                        { value: 'on-site', label: 'On-site' },
+                        { value: 'hybrid', label: 'Hybrid' },
+                        { value: 'remote', label: 'Remote' },
+                      ].map((option) => (
+                        <label key={option.value} className="flex items-center gap-2 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-700">
+                          <input type="radio" name="work_mode" value={option.value} defaultChecked={option.value === 'hybrid'} required />
+                          {option.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Remote eligibility (optional)</label>
+                    <input
+                      type="text"
+                      name="remote_eligibility"
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      placeholder="e.g., US only, Utah only"
+                    />
                   </div>
                   <InternshipLocationFields />
                 </div>
@@ -1124,6 +1221,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
                       type="submit"
                       name="create_mode"
                       value="draft"
+                      formNoValidate
                       className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
                     >
                       Save draft
@@ -1137,6 +1235,17 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
               <details open className="rounded-xl border border-slate-200 bg-white">
                 <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">Details</summary>
                 <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-slate-700">Short summary</label>
+                    <textarea
+                      name="short_summary"
+                      rows={2}
+                      className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm"
+                      placeholder="One-line card preview for students."
+                      required
+                    />
+                  </div>
+
                   <div>
                     <label className="text-xs font-medium text-slate-700">Description</label>
                     <textarea

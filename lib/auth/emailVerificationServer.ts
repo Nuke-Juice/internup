@@ -4,6 +4,8 @@ import { headers } from 'next/headers'
 import { supabaseServer } from '@/lib/supabase/server'
 import { resendVerificationEmail, type ResendVerificationResult } from '@/lib/auth/emailVerification'
 import { resolveServerAppOrigin } from '@/lib/url/origin'
+import { normalizeNextPathOrDefault } from '@/lib/auth/nextPath'
+import { normalizeAuthError } from '@/lib/auth/normalizeAuthError'
 
 async function resolveAppOrigin() {
   const headerStore = await headers()
@@ -19,12 +21,6 @@ async function resolveAppOrigin() {
 
   if (origin) return origin
   throw new Error('Could not resolve app origin for verification email redirect')
-}
-
-function normalizeNext(nextUrl: string) {
-  if (!nextUrl.startsWith('/')) return '/'
-  if (nextUrl.startsWith('//')) return '/'
-  return nextUrl
 }
 
 export async function resendVerificationEmailAction(
@@ -55,19 +51,30 @@ export async function resendVerificationEmailAction(
       .eq('verified', false)
 
     if (verifySyncError) {
-      return { ok: false, error: 'Email is confirmed, but verification sync failed. Please refresh and try again.' }
+      console.warn('[auth] verified_sync_failed', {
+        reasonCode: 'verified_sync_failed_resend',
+        userId: user.id,
+      })
     }
 
-    return { ok: true, message: 'Email is already verified. Verification status has been synced.' }
+    return { ok: true, message: 'Email is already verified. Continue to your account.' }
   }
 
   const appOrigin = await resolveAppOrigin()
   const callback = new URL('/auth/callback', appOrigin)
-  callback.searchParams.set('next', normalizeNext(nextUrl))
+  callback.searchParams.set('next', normalizeNextPathOrDefault(nextUrl))
 
-  return resendVerificationEmail({
+  const result = await resendVerificationEmail({
     email: normalizedEmail,
     emailRedirectTo: callback.toString(),
     resend: (input) => supabase.auth.resend(input),
   })
+
+  if (!result.ok) {
+    const normalized = normalizeAuthError({ message: result.error }, 'verify')
+    console.warn('[auth] resend_verification_failed', { reasonCode: normalized.reasonCode, userId: user.id })
+    return { ok: false, error: normalized.publicMessage }
+  }
+
+  return result
 }

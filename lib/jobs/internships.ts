@@ -14,6 +14,8 @@ export type Internship = {
   location_lng: number | null
   location_source: 'employer' | 'override' | string | null
   description: string | null
+  short_summary: string | null
+  remote_eligibility: string | null
   experience_level: string | null
   role_category: string | null
   category: string | null
@@ -102,8 +104,10 @@ export type Internship = {
 }
 
 const INTERNSHIP_SELECT =
-  'id, title, company_name, employer_id, employer_verification_tier, location, location_city, location_state, description, experience_level, role_category, category, work_mode, term, hours_min, hours_max, required_skills, preferred_skills, recommended_coursework, target_graduation_years, internship_required_skill_items(skill_id, skill:skills(id, slug, label, category)), internship_preferred_skill_items(skill_id, skill:skills(id, slug, label, category)), internship_coursework_items(coursework_item_id, coursework:coursework_items(id, name, normalized_name)), internship_coursework_category_links(category_id, category:coursework_categories(id, name, normalized_name)), resume_required, application_deadline, apply_deadline, majors, hours_per_week, pay, created_at, is_active, source'
+  'id, title, company_name, employer_id, employer_verification_tier, location, location_city, location_state, description, short_summary, remote_eligibility, experience_level, role_category, category, work_mode, term, hours_min, hours_max, required_skills, preferred_skills, recommended_coursework, target_graduation_years, internship_required_skill_items(skill_id, skill:skills(id, slug, label, category)), internship_preferred_skill_items(skill_id, skill:skills(id, slug, label, category)), internship_coursework_items(coursework_item_id, coursework:coursework_items(id, name, normalized_name)), internship_coursework_category_links(category_id, category:coursework_categories(id, name, normalized_name)), resume_required, application_deadline, apply_deadline, majors, hours_per_week, pay, created_at, is_active, source'
 const INTERNSHIP_SELECT_BASE =
+  'id, title, company_name, employer_id, employer_verification_tier, location, location_city, location_state, description, short_summary, remote_eligibility, experience_level, role_category, category, work_mode, term, hours_min, hours_max, required_skills, preferred_skills, recommended_coursework, target_graduation_years, resume_required, application_deadline, apply_deadline, majors, hours_per_week, pay, created_at, is_active, source'
+const INTERNSHIP_SELECT_LEGACY =
   'id, title, company_name, employer_id, employer_verification_tier, location, location_city, location_state, description, experience_level, role_category, category, work_mode, term, hours_min, hours_max, required_skills, preferred_skills, recommended_coursework, target_graduation_years, resume_required, application_deadline, apply_deadline, majors, hours_per_week, pay, created_at, is_active, source'
 
 export async function fetchInternships(options?: { limit?: number }) {
@@ -142,7 +146,57 @@ export async function fetchInternships(options?: { limit?: number }) {
     const { data: fallbackData, error: fallbackError } = await fallbackQuery
     if (fallbackError) {
       console.error('[jobs] fetchInternships base query failed', fallbackError.message)
-      return []
+
+      const missingColumn = fallbackError.message.toLowerCase().includes('does not exist')
+      if (!missingColumn) {
+        return []
+      }
+
+      let legacyQuery = supabase
+        .from('internships')
+        .select(INTERNSHIP_SELECT_LEGACY)
+        .eq('is_active', true)
+        .or(`application_deadline.is.null,application_deadline.gte.${today}`)
+        .order('created_at', { ascending: false })
+
+      if (options?.limit) {
+        legacyQuery = legacyQuery.limit(options.limit)
+      }
+
+      const { data: legacyData, error: legacyError } = await legacyQuery
+      if (legacyError) {
+        console.error('[jobs] fetchInternships legacy query failed', legacyError.message)
+        return []
+      }
+
+      rows =
+        (legacyData ?? []) as unknown as Array<
+          Omit<Internship, 'required_skill_ids' | 'preferred_skill_ids' | 'coursework_item_ids' | 'coursework_category_ids' | 'coursework_category_names'>
+        >
+      return rows.map((row) => ({
+        ...row,
+        short_summary: row.short_summary ?? null,
+        remote_eligibility: row.remote_eligibility ?? null,
+        required_skill_ids: (row.internship_required_skill_items ?? [])
+          .map((item) => item.skill_id)
+          .filter((item): item is string => typeof item === 'string'),
+        preferred_skill_ids: (row.internship_preferred_skill_items ?? [])
+          .map((item) => item.skill_id)
+          .filter((item): item is string => typeof item === 'string'),
+        coursework_item_ids: (row.internship_coursework_items ?? [])
+          .map((item) => item.coursework_item_id)
+          .filter((item): item is string => typeof item === 'string'),
+        coursework_category_ids: (row.internship_coursework_category_links ?? [])
+          .map((item) => item.category_id)
+          .filter((item): item is string => typeof item === 'string'),
+        coursework_category_names: (row.internship_coursework_category_links ?? [])
+          .map((item) => {
+            const category = item.category as { name?: string | null } | Array<{ name?: string | null }> | null
+            if (Array.isArray(category)) return typeof category[0]?.name === 'string' ? category[0].name : ''
+            return typeof category?.name === 'string' ? category.name : ''
+          })
+          .filter((item): item is string => typeof item === 'string' && item.length > 0),
+      }))
     }
 
     rows =
@@ -153,6 +207,8 @@ export async function fetchInternships(options?: { limit?: number }) {
 
   return rows.map((row) => ({
     ...row,
+    short_summary: row.short_summary ?? null,
+    remote_eligibility: row.remote_eligibility ?? null,
     required_skill_ids: (row.internship_required_skill_items ?? [])
       .map((item) => item.skill_id)
       .filter((item): item is string => typeof item === 'string'),

@@ -1,23 +1,17 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { ArrowLeft } from 'lucide-react'
-import { normalizeNextPath, resolvePostAuthRedirect } from '@/lib/auth/postAuthRedirect'
+import { resolvePostAuthRedirect } from '@/lib/auth/postAuthRedirect'
+import { normalizeNextPath } from '@/lib/auth/nextPath'
+import { normalizeAuthError } from '@/lib/auth/normalizeAuthError'
 import { supabaseServer } from '@/lib/supabase/server'
 import OAuthButtons from '@/components/auth/OAuthButtons'
 import PressRevealPasswordField from '@/components/forms/PressRevealPasswordField'
 
-function getErrorMessage(message: string) {
-  const normalized = message.toLowerCase()
-  if (normalized.includes('invalid login credentials')) {
-    return 'Invalid email or password.'
-  }
-  return message
-}
-
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ error?: string; next?: string }>
+  searchParams?: Promise<{ error?: string; next?: string; reason?: string }>
 }) {
   async function signIn(formData: FormData) {
     'use server'
@@ -37,13 +31,15 @@ export default async function LoginPage({
     })
 
     if (error) {
-      const message = encodeURIComponent(getErrorMessage(error.message))
+      const normalized = normalizeAuthError(error, 'login')
+      console.warn('[auth] login_signin_failed', { reasonCode: normalized.reasonCode })
+      const message = encodeURIComponent(normalized.publicMessage)
       const nextParam = nextPath ? `&next=${encodeURIComponent(nextPath)}` : ''
       redirect(`/login?error=${message}${nextParam}`)
     }
 
     const { data: authData } = await supabase.auth.getUser()
-    if (!authData.user) redirect('/login?error=Unable+to+load+session.')
+    if (!authData.user) redirect('/login?error=Could+not+sign+in.+Please+try+again.&reason=session_missing')
 
   const { destination } = await resolvePostAuthRedirect({
       supabase,
@@ -57,6 +53,15 @@ export default async function LoginPage({
 
   const resolvedSearchParams = (searchParams ? await searchParams : {}) ?? {}
   const nextPath = normalizeNextPath(resolvedSearchParams.next)
+  const normalizedReason = (resolvedSearchParams.reason ?? '').trim()
+  const reasonOnlyMessage =
+    !resolvedSearchParams.error && normalizedReason
+      ? normalizedReason === 'otp_verify_failed' || normalizedReason === 'oauth_link_invalid_or_expired'
+        ? 'Email link is invalid or has expired.'
+        : normalizedReason.startsWith('oauth')
+          ? 'Could not finish OAuth sign-in.'
+          : null
+      : null
 
   return (
     <main className="min-h-screen bg-white px-6 py-12">
@@ -74,7 +79,7 @@ export default async function LoginPage({
 
         <div className="mt-6 border-t border-slate-200 pt-6">
         <div className="mb-4 rounded-2xl border border-slate-300 bg-white p-4 shadow-sm">
-          <OAuthButtons nextPath={nextPath ?? undefined} />
+          <OAuthButtons nextPath={nextPath ?? undefined} showHelperText={false} />
         </div>
         <form action={signIn} className="space-y-4 rounded-2xl border border-slate-300 bg-white p-6 shadow-md">
           {nextPath ? <input type="hidden" name="next" value={nextPath} /> : null}
@@ -103,9 +108,9 @@ export default async function LoginPage({
             </div>
           </div>
 
-          {resolvedSearchParams.error && (
+          {(resolvedSearchParams.error || reasonOnlyMessage) && (
             <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
-              {decodeURIComponent(resolvedSearchParams.error)}
+              {resolvedSearchParams.error ? decodeURIComponent(resolvedSearchParams.error) : reasonOnlyMessage}
             </p>
           )}
 

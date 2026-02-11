@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { ArrowLeft } from 'lucide-react'
 import { redirect } from 'next/navigation'
 import AdminAccount from '@/components/account/AdminAccount'
 import ConfirmSignOutButton from '@/components/auth/ConfirmSignOutButton'
@@ -60,6 +61,13 @@ export default async function ProfilePage() {
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-5xl space-y-6">
+        <Link
+          href="/admin"
+          aria-label="Go back"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </Link>
         <AdminAccount
           userId={user.id}
           userEmail={user.email ?? null}

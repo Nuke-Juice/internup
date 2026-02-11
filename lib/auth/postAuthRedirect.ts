@@ -2,19 +2,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getMinimumProfileCompleteness } from '@/lib/profileCompleteness'
 import { isAdminRole, isAppRole, isUserRole, type AppRole, type UserRole } from '@/lib/auth/roles'
 import { buildVerifyRequiredHref } from '@/lib/auth/emailVerification'
+import { normalizeNextPath } from '@/lib/auth/nextPath'
 
 type RoleLookupRow = { role: UserRole | null; verified?: boolean | null } | null
 
 function isNonEmpty(value: string | null | undefined) {
   return typeof value === 'string' && value.trim().length > 0
-}
-
-export function normalizeNextPath(value: string | null | undefined) {
-  if (!value) return null
-  const trimmed = value.trim()
-  if (!trimmed.startsWith('/')) return null
-  if (trimmed.startsWith('//')) return null
-  return trimmed
 }
 
 function defaultDestinationForRole(role: AppRole) {
@@ -108,23 +101,17 @@ export async function resolvePostAuthRedirect(params: {
     .maybeSingle<RoleLookupRow>()
 
   const role = isUserRole(userRow?.role) ? userRow.role : null
-  let isVerificationComplete = userRow?.verified === true
-  if (!isVerificationComplete && Boolean(authUser?.email_confirmed_at)) {
+  if (Boolean(authUser?.email_confirmed_at) && userRow?.verified !== true) {
     const { error: markVerifiedError } = await params.supabase
       .from('users')
       .update({ verified: true })
       .eq('id', params.userId)
       .eq('verified', false)
-    if (!markVerifiedError) {
-      isVerificationComplete = true
-    }
-  }
-  if (!isVerificationComplete) {
-    const verifyNext = normalizedNext ?? (isAppRole(role) ? signupDetailsPathForRole(role) : '/account')
-    return {
-      destination: buildVerifyRequiredHref(verifyNext, 'signup_email_verification_pending'),
-      role,
-      onboardingComplete: false,
+    if (markVerifiedError) {
+      console.warn('[auth] verified_sync_failed', {
+        reasonCode: 'verified_sync_failed_post_auth',
+        userId: params.userId,
+      })
     }
   }
 

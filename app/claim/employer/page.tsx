@@ -59,6 +59,61 @@ function mergeCompanyProfile(
   }
 }
 
+function mergePublicCompanyProfile(
+  target: {
+    company_name: string | null
+    tagline: string | null
+    about_us: string | null
+    website: string | null
+    industry: string | null
+    founded_date: string | null
+    location_city: string | null
+    location_state: string | null
+    avatar_url: string | null
+    header_image_url: string | null
+  } | null,
+  source: {
+    company_name: string | null
+    tagline: string | null
+    about_us: string | null
+    website: string | null
+    industry: string | null
+    founded_date: string | null
+    location_city: string | null
+    location_state: string | null
+    avatar_url: string | null
+    header_image_url: string | null
+  } | null
+) {
+  if (!target && !source) {
+    return {
+      company_name: null,
+      tagline: null,
+      about_us: null,
+      website: null,
+      industry: null,
+      founded_date: null,
+      location_city: null,
+      location_state: null,
+      avatar_url: null,
+      header_image_url: null,
+    }
+  }
+
+  return {
+    company_name: target?.company_name ?? source?.company_name ?? null,
+    tagline: target?.tagline ?? source?.tagline ?? null,
+    about_us: target?.about_us ?? source?.about_us ?? null,
+    website: target?.website ?? source?.website ?? null,
+    industry: target?.industry ?? source?.industry ?? null,
+    founded_date: target?.founded_date ?? source?.founded_date ?? null,
+    location_city: target?.location_city ?? source?.location_city ?? null,
+    location_state: target?.location_state ?? source?.location_state ?? null,
+    avatar_url: target?.avatar_url ?? source?.avatar_url ?? null,
+    header_image_url: target?.header_image_url ?? source?.header_image_url ?? null,
+  }
+}
+
 export default async function EmployerClaimPage({ searchParams }: { searchParams?: SearchParams }) {
   const resolvedSearchParams = searchParams ? await searchParams : undefined
   const token = String(resolvedSearchParams?.token ?? '').trim()
@@ -226,7 +281,7 @@ export default async function EmployerClaimPage({ searchParams }: { searchParams
   const sourceEmployerId = consumedToken.employer_id
 
   if (sourceEmployerId !== user.id) {
-    const [{ data: sourceProfile }, { data: targetProfile }] = await Promise.all([
+    const [{ data: sourceProfile }, { data: targetProfile }, { data: sourcePublicProfile }, { data: targetPublicProfile }] = await Promise.all([
       admin
         .from('employer_profiles')
         .select('user_id, company_name, website, contact_email, industry, location, overview, avatar_url, header_image_url')
@@ -236,6 +291,16 @@ export default async function EmployerClaimPage({ searchParams }: { searchParams
         .from('employer_profiles')
         .select('user_id, company_name, website, contact_email, industry, location, overview, avatar_url, header_image_url')
         .eq('user_id', user.id)
+        .maybeSingle(),
+      admin
+        .from('employer_public_profiles')
+        .select('employer_id, company_name, tagline, about_us, website, industry, founded_date, location_city, location_state, avatar_url, header_image_url')
+        .eq('employer_id', sourceEmployerId)
+        .maybeSingle(),
+      admin
+        .from('employer_public_profiles')
+        .select('employer_id, company_name, tagline, about_us, website, industry, founded_date, location_city, location_state, avatar_url, header_image_url')
+        .eq('employer_id', user.id)
         .maybeSingle(),
     ])
 
@@ -263,6 +328,33 @@ export default async function EmployerClaimPage({ searchParams }: { searchParams
       } else {
         await admin.from('employer_profiles').update({ user_id: user.id }).eq('user_id', sourceEmployerId)
       }
+    }
+
+    if (sourcePublicProfile?.employer_id) {
+      if (targetPublicProfile?.employer_id) {
+        const mergedPublic = mergePublicCompanyProfile(targetPublicProfile, sourcePublicProfile)
+        await admin.from('employer_public_profiles').update(mergedPublic).eq('employer_id', user.id)
+        await admin.from('employer_public_profiles').delete().eq('employer_id', sourceEmployerId)
+      } else {
+        await admin
+          .from('employer_public_profiles')
+          .update({ employer_id: user.id })
+          .eq('employer_id', sourceEmployerId)
+      }
+    }
+
+    const { data: sourceAuthData } = await admin.auth.admin.getUserById(sourceEmployerId)
+    const sourceAuthEmail = normalizeEmail(sourceAuthData.user?.email)
+    const sourceMetadata = (sourceAuthData.user?.user_metadata ?? {}) as { concierge_placeholder?: unknown }
+    const isConciergePlaceholder =
+      sourceAuthEmail.endsWith('@example.invalid') || sourceMetadata.concierge_placeholder === true
+
+    // Clean up placeholder concierge accounts after a successful transfer.
+    if (isConciergePlaceholder) {
+      await Promise.all([
+        admin.from('users').delete().eq('id', sourceEmployerId),
+        admin.auth.admin.deleteUser(sourceEmployerId),
+      ])
     }
   }
 

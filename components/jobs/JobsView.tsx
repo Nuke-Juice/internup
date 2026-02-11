@@ -2,7 +2,8 @@ import Link from 'next/link'
 import { parseMajors, rankInternships } from '@/lib/matching'
 import { getEmployerPlanFeatures } from '@/lib/billing/plan'
 import { getCommuteMinutesForListings, toGeoPoint } from '@/lib/commute'
-import { fetchInternships, formatMajors } from '@/lib/jobs/internships'
+import { fetchInternships, formatMajors, type Internship } from '@/lib/jobs/internships'
+import { normalizeStateCode } from '@/lib/locations/usLocationCatalog'
 import { parseStudentPreferenceSignals } from '@/lib/student/preferenceSignals'
 import { supabaseServer } from '@/lib/supabase/server'
 import FiltersPanel from '@/app/jobs/_components/FiltersPanel'
@@ -32,6 +33,8 @@ export type JobsQuery = {
   hmin?: string
   hmax?: string
   hmax_slider?: string
+  city?: string
+  state?: string
   loc?: string
   radius?: string
 }
@@ -44,6 +47,24 @@ type JobsViewProps = {
 }
 
 type SortMode = 'best_match' | 'newest'
+
+type JobsFilterState = {
+  searchQuery: string
+  category: string
+  payMin: string
+  remoteOnly: boolean
+  experience: string
+  hoursMin: string
+  hoursMax: string
+  locationCity: string
+  locationState: string
+  radius: string
+}
+
+type ActiveFilterDescriptor = {
+  key: keyof JobsFilterState
+  label: string
+}
 
 function normalizeSort(value: string | undefined, isStudent: boolean): SortMode {
   if (value === 'best_match' || value === 'newest') {
@@ -99,6 +120,93 @@ function extractNumericPayRange(pay: string | null | undefined) {
     min: Math.min(...values),
     max: Math.max(...values),
   }
+}
+
+function matchesListingFilters(listing: Internship, filters: JobsFilterState) {
+  const listingMajors = parseMajors(listing.majors)
+  const normalizedTitle = listing.title?.toLowerCase() ?? ''
+  const normalizedCompany = listing.company_name?.toLowerCase() ?? ''
+  const normalizedDescription = listing.description?.toLowerCase() ?? ''
+  const normalizedCategoryText = (listing.category ?? listing.role_category ?? '').toLowerCase()
+  const isRemote = (listing.location ?? '').toLowerCase().includes('remote')
+  const listingExperience = (listing.experience_level ?? '').toLowerCase()
+  const parsedMinHours = filters.hoursMin ? Number(filters.hoursMin) : null
+  const parsedMaxHours = filters.hoursMax ? Number(filters.hoursMax) : null
+  const listingPayRange = extractNumericPayRange(listing.pay)
+  const normalizedLocationCity = filters.locationCity.toLowerCase()
+  const normalizedLocationState = filters.locationState.toLowerCase()
+  const parsedRadius =
+    filters.radius === '10' || filters.radius === '25' || filters.radius === '50' || filters.radius === '100'
+      ? Number(filters.radius)
+      : 0
+  const listingCity = (listing.location_city ?? '').toLowerCase()
+  const listingState = (listing.location_state ?? '').toLowerCase()
+  const parsedPayMin = filters.payMin ? Number(filters.payMin) : null
+
+  if (filters.searchQuery) {
+    const normalizedSearchQuery = filters.searchQuery.toLowerCase()
+    const internshipMatches =
+      normalizedTitle.includes(normalizedSearchQuery) ||
+      normalizedDescription.includes(normalizedSearchQuery) ||
+      normalizedCategoryText.includes(normalizedSearchQuery)
+    const employerMatches = normalizedCompany.includes(normalizedSearchQuery)
+    if (!internshipMatches && !employerMatches) return false
+  }
+
+  if (filters.category) {
+    const normalizedCategory = filters.category.toLowerCase()
+    const listingCategory = (listing.category ?? listing.role_category ?? '').toLowerCase()
+    const hasCategoryMatch =
+      listingCategory === normalizedCategory ||
+      listingMajors.some((major) => major.includes(normalizedCategory)) ||
+      normalizedTitle.includes(normalizedCategory)
+    if (!hasCategoryMatch) return false
+  }
+
+  if (typeof parsedPayMin === 'number' && Number.isFinite(parsedPayMin) && parsedPayMin > 0) {
+    if (!listingPayRange || listingPayRange.max < parsedPayMin) return false
+  }
+
+  if (filters.remoteOnly && !isRemote) return false
+  if (filters.experience && listingExperience !== filters.experience) return false
+
+  const listingHoursMin = typeof listing.hours_min === 'number' ? listing.hours_min : listing.hours_per_week
+  const listingHoursMax = typeof listing.hours_max === 'number' ? listing.hours_max : listing.hours_per_week
+  if (typeof parsedMinHours === 'number' && Number.isFinite(parsedMinHours) && typeof listingHoursMax === 'number') {
+    if (listingHoursMax < parsedMinHours) return false
+  }
+  if (typeof parsedMaxHours === 'number' && Number.isFinite(parsedMaxHours) && typeof listingHoursMin === 'number') {
+    if (listingHoursMin > parsedMaxHours) return false
+  }
+
+  if (normalizedLocationState && listingState !== normalizedLocationState) return false
+  if (normalizedLocationCity) {
+    const directCityMatch = listingCity.includes(normalizedLocationCity)
+    const relaxedRadiusMatch =
+      parsedRadius >= 25 &&
+      normalizedLocationState.length > 0 &&
+      !directCityMatch &&
+      listingState === normalizedLocationState
+    if (!directCityMatch && !relaxedRadiusMatch) return false
+  }
+
+  return true
+}
+
+function getActiveFilterDescriptors(filters: JobsFilterState) {
+  const candidates: ActiveFilterDescriptor[] = [
+    { key: 'searchQuery', label: 'Search' },
+    { key: 'category', label: 'Category' },
+    { key: 'payMin', label: 'Pay range' },
+    { key: 'remoteOnly', label: 'Work mode' },
+    { key: 'experience', label: 'Experience' },
+    { key: 'hoursMin', label: 'Hours min' },
+    { key: 'hoursMax', label: 'Hours max' },
+    { key: 'locationCity', label: 'Location (city)' },
+    { key: 'locationState', label: 'Location (state)' },
+    { key: 'radius', label: 'Radius' },
+  ]
+  return candidates.filter((item) => Boolean(filters[item.key]))
 }
 
 function getStudentProfileCompletion(profile: {
@@ -212,17 +320,16 @@ export default async function JobsView({
   const resolvedSearchParams = ((searchParams ? await Promise.resolve(searchParams) : {}) ?? {}) as JobsQuery
   const requestedSortRaw = resolvedSearchParams.sort
   const searchQuery = (resolvedSearchParams.q ?? '').trim()
-  const normalizedSearchQuery = searchQuery.toLowerCase()
   const activeCategory = resolvedSearchParams.category ?? ''
   const payMin = resolvedSearchParams.paymin ?? ''
   const remoteOnly = resolvedSearchParams.remote === '1'
   const selectedExperience = resolvedSearchParams.exp ?? ''
   const hoursMin = resolvedSearchParams.hmin ?? ''
   const hoursMax = resolvedSearchParams.hmax?.trim() || resolvedSearchParams.hmax_slider?.trim() || ''
-  const rawLocationQuery = (resolvedSearchParams.loc ?? '').trim()
+  const legacyLocation = parseCityState((resolvedSearchParams.loc ?? '').trim())
+  const locationCity = (resolvedSearchParams.city ?? legacyLocation.city ?? '').trim()
+  const locationState = normalizeStateCode(resolvedSearchParams.state ?? legacyLocation.state ?? '')
   const radius = resolvedSearchParams.radius ?? ''
-  const parsedRadius =
-    radius === '10' || radius === '25' || radius === '50' || radius === '100' ? Number(radius) : 0
   const parsedPayMin = payMin ? Number(payMin) : null
 
   const supabase = await supabaseServer()
@@ -232,32 +339,18 @@ export default async function JobsView({
 
   const internships = await fetchInternships()
   const newestInternships = internships.slice(0, 6)
-  const launchVerifiedLocations = [
-    'Salt Lake City, UT',
-    'Provo, UT',
-    'Orem, UT',
-    'Lehi, UT',
-    'Ogden, UT',
-    'Sandy, UT',
-    'Draper, UT',
-    'Park City, UT',
-  ]
-  const verifiedLocations = Array.from(
-    new Set(
-      [
-        ...launchVerifiedLocations,
-        ...internships
-          .map((listing) => {
-            const city = listing.location_city?.trim()
-            const state = listing.location_state?.trim()
-            if (city && state) return `${city}, ${state}`
-            return null
-          })
-          .filter((value): value is string => Boolean(value)),
-      ]
-    )
-  ).sort((a, b) => a.localeCompare(b))
-  const locationQuery = verifiedLocations.includes(rawLocationQuery) ? rawLocationQuery : ''
+  const filters: JobsFilterState = {
+    searchQuery,
+    category: activeCategory,
+    payMin,
+    remoteOnly,
+    experience: selectedExperience,
+    hoursMin,
+    hoursMax,
+    locationCity,
+    locationState,
+    radius,
+  }
 
   let activeSortMode: SortMode = 'newest'
   let profileMajors: string[] = []
@@ -362,81 +455,7 @@ export default async function JobsView({
   const isStudent = role === 'student'
   activeSortMode = normalizeSort(requestedSortRaw, isStudent)
 
-  const filteredCandidates = internships.filter((listing) => {
-    const listingMajors = parseMajors(listing.majors)
-    const normalizedTitle = listing.title?.toLowerCase() ?? ''
-    const normalizedCompany = listing.company_name?.toLowerCase() ?? ''
-    const normalizedDescription = listing.description?.toLowerCase() ?? ''
-    const normalizedCategoryText = (listing.category ?? listing.role_category ?? '').toLowerCase()
-    const isRemote = (listing.location ?? '').toLowerCase().includes('remote')
-    const listingExperience = (listing.experience_level ?? '').toLowerCase()
-    const parsedMinHours = hoursMin ? Number(hoursMin) : null
-    const parsedMaxHours = hoursMax ? Number(hoursMax) : null
-    const listingPayRange = extractNumericPayRange(listing.pay)
-    const normalizedLocationQuery = locationQuery.toLowerCase()
-    const listingCity = (listing.location_city ?? '').toLowerCase()
-    const listingState = (listing.location_state ?? '').toLowerCase()
-    const listingLocation = (listing.location ?? '').toLowerCase()
-
-    if (normalizedSearchQuery) {
-      const internshipMatches =
-        normalizedTitle.includes(normalizedSearchQuery) ||
-        normalizedDescription.includes(normalizedSearchQuery) ||
-        normalizedCategoryText.includes(normalizedSearchQuery)
-      const employerMatches = normalizedCompany.includes(normalizedSearchQuery)
-
-      if (!internshipMatches && !employerMatches) return false
-    }
-
-    if (activeCategory) {
-      const normalizedCategory = activeCategory.toLowerCase()
-      const listingCategory = (listing.category ?? listing.role_category ?? '').toLowerCase()
-      const hasCategoryMatch =
-        listingCategory === normalizedCategory ||
-        listingMajors.some((major) => major.includes(normalizedCategory)) ||
-        normalizedTitle.includes(normalizedCategory)
-      if (!hasCategoryMatch) return false
-    }
-
-    if (typeof parsedPayMin === 'number' && Number.isFinite(parsedPayMin) && parsedPayMin > 0) {
-      if (!listingPayRange || listingPayRange.max < parsedPayMin) return false
-    }
-
-    if (remoteOnly && !isRemote) return false
-    if (selectedExperience && listingExperience !== selectedExperience) return false
-    const listingHoursMin = typeof listing.hours_min === 'number' ? listing.hours_min : listing.hours_per_week
-    const listingHoursMax = typeof listing.hours_max === 'number' ? listing.hours_max : listing.hours_per_week
-    if (typeof parsedMinHours === 'number' && Number.isFinite(parsedMinHours) && typeof listingHoursMax === 'number') {
-      if (listingHoursMax < parsedMinHours) return false
-    }
-    if (typeof parsedMaxHours === 'number' && Number.isFinite(parsedMaxHours) && typeof listingHoursMin === 'number') {
-      if (listingHoursMin > parsedMaxHours) return false
-    }
-
-    if (normalizedLocationQuery) {
-      const [queryCityRaw, queryStateRaw] = normalizedLocationQuery.split(',').map((value) => value.trim())
-      const queryCity = queryCityRaw ?? normalizedLocationQuery
-      const queryState = (queryStateRaw ?? '').replace(/[^a-z]/g, '').slice(0, 2)
-      const directMatch =
-        listingLocation.includes(normalizedLocationQuery) ||
-        listingCity.includes(normalizedLocationQuery) ||
-        listingState === normalizedLocationQuery
-      let radiusMatch = false
-
-      if (parsedRadius > 0) {
-        if (queryCity && listingCity && listingCity.includes(queryCity)) {
-          radiusMatch = true
-        }
-        if (!radiusMatch && parsedRadius >= 25 && queryState && listingState === queryState) {
-          radiusMatch = true
-        }
-      }
-
-      if (!directMatch && !radiusMatch) return false
-    }
-
-    return true
-  })
+  const filteredCandidates = internships.filter((listing) => matchesListingFilters(listing, filters))
 
   let filteredInternships = filteredCandidates
 
@@ -605,17 +624,34 @@ export default async function JobsView({
     }
   }
 
-  const activeFilterCount = [
-    Boolean(searchQuery),
-    Boolean(activeCategory),
-    Boolean(payMin),
-    remoteOnly,
-    Boolean(selectedExperience),
-    Boolean(hoursMin),
-    Boolean(hoursMax),
-    Boolean(locationQuery),
-    Boolean(radius),
-  ].filter(Boolean).length
+  const activeFilterDescriptors = getActiveFilterDescriptors(filters)
+  const activeFilterCount = activeFilterDescriptors.length
+  const suggestedNoResultFilters = (() => {
+    if (filteredInternships.length > 0 || activeFilterDescriptors.length === 0) return [] as ActiveFilterDescriptor[]
+
+    const scored = activeFilterDescriptors
+      .map((descriptor) => {
+        const stripped: JobsFilterState = { ...filters }
+        if (descriptor.key === 'remoteOnly') stripped.remoteOnly = false
+        if (descriptor.key === 'searchQuery') stripped.searchQuery = ''
+        if (descriptor.key === 'category') stripped.category = ''
+        if (descriptor.key === 'payMin') stripped.payMin = ''
+        if (descriptor.key === 'experience') stripped.experience = ''
+        if (descriptor.key === 'hoursMin') stripped.hoursMin = ''
+        if (descriptor.key === 'hoursMax') stripped.hoursMax = ''
+        if (descriptor.key === 'locationCity') stripped.locationCity = ''
+        if (descriptor.key === 'locationState') stripped.locationState = ''
+        if (descriptor.key === 'radius') stripped.radius = ''
+        const count = internships.filter((listing) => matchesListingFilters(listing, stripped)).length
+        return { descriptor, increase: count }
+      })
+      .sort((a, b) => b.increase - a.increase)
+
+    const positive = scored.filter((item) => item.increase > 0).slice(0, 2).map((item) => item.descriptor)
+    if (positive.length > 0) return positive
+    return activeFilterDescriptors.slice(0, 2)
+  })()
+
   const isHeavyFiltering = activeFilterCount >= 4
   const shouldShowResetToMatchedView =
     isStudent && (activeSortMode === 'newest' || isHeavyFiltering)
@@ -628,8 +664,47 @@ export default async function JobsView({
   if (selectedExperience) preservedQueryParams.set('exp', selectedExperience)
   if (hoursMin) preservedQueryParams.set('hmin', hoursMin)
   if (hoursMax) preservedQueryParams.set('hmax', hoursMax)
-  if (locationQuery) preservedQueryParams.set('loc', locationQuery)
+  if (locationCity) preservedQueryParams.set('city', locationCity)
+  if (locationState) preservedQueryParams.set('state', locationState)
   if (radius) preservedQueryParams.set('radius', radius)
+
+  const clearSuggestedFiltersHref = (() => {
+    if (suggestedNoResultFilters.length === 0) return withSearchParams(basePath, preservedQueryParams, anchorId)
+    const params = new URLSearchParams(preservedQueryParams)
+    for (const descriptor of suggestedNoResultFilters) {
+      if (descriptor.key === 'remoteOnly') {
+        params.delete('remote')
+      } else if (descriptor.key === 'searchQuery') {
+        params.delete('q')
+      } else if (descriptor.key === 'category') {
+        params.delete('category')
+      } else if (descriptor.key === 'payMin') {
+        params.delete('paymin')
+      } else if (descriptor.key === 'experience') {
+        params.delete('exp')
+      } else if (descriptor.key === 'hoursMin') {
+        params.delete('hmin')
+      } else if (descriptor.key === 'hoursMax') {
+        params.delete('hmax')
+      } else if (descriptor.key === 'locationCity') {
+        params.delete('city')
+      } else if (descriptor.key === 'locationState') {
+        params.delete('state')
+      } else if (descriptor.key === 'radius') {
+        params.delete('radius')
+      }
+    }
+    return withSearchParams(basePath, params, anchorId)
+  })()
+
+  const noMatchesHint =
+    filteredInternships.length === 0 && activeFilterDescriptors.length > 0
+      ? {
+          labels: suggestedNoResultFilters.map((item) => item.label),
+          clearSuggestedHref: clearSuggestedFiltersHref,
+          resetAllHref: buildBrowseHref(basePath, anchorId),
+        }
+      : null
 
   const bestMatchHref = (() => {
     const params = new URLSearchParams(preservedQueryParams)
@@ -765,7 +840,6 @@ export default async function JobsView({
         <div className="mt-6 grid gap-6 lg:grid-cols-[290px_1fr]">
           <FiltersPanel
             categories={categoryTiles}
-            verifiedLocations={verifiedLocations}
             state={{
               sort: activeSortMode,
               searchQuery,
@@ -775,9 +849,11 @@ export default async function JobsView({
               experience: selectedExperience,
               hoursMin,
               hoursMax,
-              locationQuery,
+              locationCity,
+              locationState,
               radius,
             }}
+            noMatchesHint={noMatchesHint}
             basePath={basePath}
             anchorId={anchorId}
           />

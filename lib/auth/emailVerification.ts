@@ -1,3 +1,5 @@
+import { normalizeNextPathOrDefault } from '@/lib/auth/nextPath'
+
 export const EMAIL_VERIFICATION_ERROR = 'EMAIL_NOT_VERIFIED' as const
 
 export type EmailVerificationErrorCode = typeof EMAIL_VERIFICATION_ERROR
@@ -21,15 +23,9 @@ export function isEmailVerified(user: EmailVerificationSubject) {
   return Boolean(user?.email_confirmed_at)
 }
 
-function normalizeNext(nextUrl: string) {
-  if (!nextUrl.startsWith('/')) return '/'
-  if (nextUrl.startsWith('//')) return '/'
-  return nextUrl
-}
-
 export function buildVerifyRequiredHref(nextUrl: string, actionName?: string) {
   const params = new URLSearchParams()
-  params.set('next', normalizeNext(nextUrl))
+  params.set('next', normalizeNextPathOrDefault(nextUrl))
   if (actionName) {
     params.set('action', actionName)
   }

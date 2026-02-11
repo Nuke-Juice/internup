@@ -1,14 +1,22 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import { toUserFacingErrorMessage } from '@/lib/errors/userFacingError'
 import { normalizeStateCode, US_STATE_OPTIONS } from '@/lib/locations/usLocationCatalog'
+import EmployerProgressBar from '@/components/onboarding/EmployerProgressBar'
+import EmployerStep1 from '@/components/onboarding/EmployerStep1'
+import EmployerStep2 from '@/components/onboarding/EmployerStep2'
+import EmployerStep3 from '@/components/onboarding/EmployerStep3'
+
+const EMPLOYER_STEPS = 3
+const EMPLOYER_DRAFT_KEY = 'onboarding:employer:details:v2'
+const profilePhotoBuckets = ['avatars', 'profile-photos']
 
 const FIELD =
-  'mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100'
+  'mt-1 w-full rounded-md border border-slate-300 bg-white p-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100'
 
 type EmployerProfileRow = {
   company_name: string | null
@@ -20,6 +28,31 @@ type EmployerProfileRow = {
   location_city: string | null
   location_state: string | null
   location_address_line1: string | null
+  overview: string | null
+  avatar_url: string | null
+}
+
+type EmployerPublicProfileRow = {
+  avatar_url: string | null
+  about_us: string | null
+}
+
+type EmployerDraft = {
+  stepIndex?: number
+  firstName?: string
+  lastName?: string
+  companyName?: string
+  website?: string
+  contactEmail?: string
+  industry?: string
+  foundedYear?: string
+  locationCity?: string
+  locationStateInput?: string
+  address?: string
+  description?: string
+  companySize?: string
+  internshipTypes?: string
+  typicalDuration?: string
 }
 
 function parseLocation(value: string | null | undefined) {
@@ -54,8 +87,20 @@ function toFoundedDateValue(year: string) {
   return `${trimmed}-01-01`
 }
 
+function readEmployerDraft() {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(EMPLOYER_DRAFT_KEY)
+    if (!raw) return null
+    return JSON.parse(raw) as EmployerDraft
+  } catch {
+    return null
+  }
+}
+
 export default function EmployerSignupDetailsPage() {
   const [initializing, setInitializing] = useState(true)
+  const [stepIndex, setStepIndex] = useState(0)
 
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
@@ -67,9 +112,25 @@ export default function EmployerSignupDetailsPage() {
   const [locationCity, setLocationCity] = useState('')
   const [locationStateInput, setLocationStateInput] = useState('')
   const [address, setAddress] = useState('')
+  const [description, setDescription] = useState('')
+  const [companySize, setCompanySize] = useState('')
+  const [internshipTypes, setInternshipTypes] = useState('')
+  const [typicalDuration, setTypicalDuration] = useState('')
+  const [logoFile, setLogoFile] = useState<File | null>(null)
+  const [logoUrl, setLogoUrl] = useState('')
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const canContinue = useMemo(() => {
+    if (stepIndex === 0) {
+      return Boolean(firstName.trim() && lastName.trim() && companyName.trim())
+    }
+    if (stepIndex === 2) {
+      return Boolean(address.trim() && locationCity.trim() && resolveStateCode(locationStateInput))
+    }
+    return true
+  }, [stepIndex, firstName, lastName, companyName, address, locationCity, locationStateInput])
 
   useEffect(() => {
     const supabase = supabaseBrowser()
@@ -85,8 +146,7 @@ export default function EmployerSignupDetailsPage() {
       }
 
       if (!user.email_confirmed_at) {
-        window.location.href =
-          '/verify-required?next=%2Fsignup%2Femployer%2Fdetails&action=signup_profile_completion'
+        window.location.href = '/verify-required?next=%2Fsignup%2Femployer%2Fdetails&action=signup_profile_completion'
         return
       }
 
@@ -103,15 +163,11 @@ export default function EmployerSignupDetailsPage() {
               .filter(Boolean)
           : []
       setFirstName(typeof metadata.first_name === 'string' ? metadata.first_name : fullNameTokens[0] ?? '')
-      setLastName(
-        typeof metadata.last_name === 'string' ? metadata.last_name : fullNameTokens.slice(1).join(' ')
-      )
+      setLastName(typeof metadata.last_name === 'string' ? metadata.last_name : fullNameTokens.slice(1).join(' '))
 
       const { data: userRow } = await supabase.from('users').select('role, verified').eq('id', user.id).maybeSingle()
       if (userRow?.verified !== true) {
-        window.location.href =
-          '/verify-required?next=%2Fsignup%2Femployer%2Fdetails&action=signup_profile_completion'
-        return
+        await supabase.from('users').update({ verified: true }).eq('id', user.id).eq('verified', false)
       }
       const role = userRow?.role
 
@@ -130,11 +186,16 @@ export default function EmployerSignupDetailsPage() {
         )
       }
 
-      const { data: profile } = await supabase
-        .from('employer_profiles')
-        .select('company_name, website, contact_email, industry, founded_date, location, location_city, location_state, location_address_line1')
-        .eq('user_id', user.id)
-        .maybeSingle<EmployerProfileRow>()
+      const [{ data: profile }, { data: publicProfile }] = await Promise.all([
+        supabase
+          .from('employer_profiles')
+          .select(
+            'company_name, website, contact_email, industry, founded_date, location, location_city, location_state, location_address_line1, overview, avatar_url'
+          )
+          .eq('user_id', user.id)
+          .maybeSingle<EmployerProfileRow>(),
+        supabase.from('employer_public_profiles').select('avatar_url, about_us').eq('employer_id', user.id).maybeSingle<EmployerPublicProfileRow>(),
+      ])
 
       if (profile) {
         const parsedLocation = parseLocation(profile.location)
@@ -146,8 +207,29 @@ export default function EmployerSignupDetailsPage() {
         setLocationCity(profile.location_city ?? parsedLocation.city)
         setLocationStateInput(profile.location_state ?? parsedLocation.state)
         setAddress(profile.location_address_line1 ?? '')
+        setDescription(profile.overview ?? publicProfile?.about_us ?? '')
+        setLogoUrl(profile.avatar_url ?? publicProfile?.avatar_url ?? '')
       } else {
         setContactEmail(user.email ?? '')
+      }
+
+      const draft = readEmployerDraft()
+      if (draft) {
+        if (typeof draft.firstName === 'string') setFirstName(draft.firstName)
+        if (typeof draft.lastName === 'string') setLastName(draft.lastName)
+        if (typeof draft.companyName === 'string') setCompanyName(draft.companyName)
+        if (typeof draft.website === 'string') setWebsite(draft.website)
+        if (typeof draft.contactEmail === 'string') setContactEmail(draft.contactEmail)
+        if (typeof draft.industry === 'string') setIndustry(draft.industry)
+        if (typeof draft.foundedYear === 'string') setFoundedYear(draft.foundedYear)
+        if (typeof draft.locationCity === 'string') setLocationCity(draft.locationCity)
+        if (typeof draft.locationStateInput === 'string') setLocationStateInput(draft.locationStateInput)
+        if (typeof draft.address === 'string') setAddress(draft.address)
+        if (typeof draft.description === 'string') setDescription(draft.description)
+        if (typeof draft.companySize === 'string') setCompanySize(draft.companySize)
+        if (typeof draft.internshipTypes === 'string') setInternshipTypes(draft.internshipTypes)
+        if (typeof draft.typicalDuration === 'string') setTypicalDuration(draft.typicalDuration)
+        if (typeof draft.stepIndex === 'number') setStepIndex(Math.min(Math.max(draft.stepIndex, 0), EMPLOYER_STEPS - 1))
       }
 
       setInitializing(false)
@@ -156,16 +238,78 @@ export default function EmployerSignupDetailsPage() {
     void initializePage()
   }, [])
 
+  useEffect(() => {
+    if (initializing || typeof window === 'undefined') return
+
+    const draft: EmployerDraft = {
+      stepIndex,
+      firstName,
+      lastName,
+      companyName,
+      website,
+      contactEmail,
+      industry,
+      foundedYear,
+      locationCity,
+      locationStateInput,
+      address,
+      description,
+      companySize,
+      internshipTypes,
+      typicalDuration,
+    }
+
+    window.localStorage.setItem(EMPLOYER_DRAFT_KEY, JSON.stringify(draft))
+  }, [
+    initializing,
+    stepIndex,
+    firstName,
+    lastName,
+    companyName,
+    website,
+    contactEmail,
+    industry,
+    foundedYear,
+    locationCity,
+    locationStateInput,
+    address,
+    description,
+    companySize,
+    internshipTypes,
+    typicalDuration,
+  ])
+
+  function validateStep(index: number) {
+    if (index === 0) {
+      if (!firstName.trim()) return 'First name is required.'
+      if (!lastName.trim()) return 'Last name is required.'
+      if (!companyName.trim()) return 'Company name is required.'
+    }
+
+    if (index === 2) {
+      if (!address.trim()) return 'Address is required.'
+      if (!locationCity.trim()) return 'City is required.'
+      const resolvedStateCode = resolveStateCode(locationStateInput)
+      if (!resolvedStateCode) return 'State is required. Enter a valid state code or name.'
+    }
+
+    return null
+  }
+
   async function saveProfileDetails() {
     setError(null)
 
-    if (!firstName.trim()) return setError('First name is required.')
-    if (!lastName.trim()) return setError('Last name is required.')
-    if (!companyName.trim()) return setError('Company name is required.')
-    if (!address.trim()) return setError('Address is required.')
-    if (!locationCity.trim()) return setError('City is required.')
+    const validationError = validateStep(0) ?? validateStep(2)
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+
     const resolvedStateCode = resolveStateCode(locationStateInput)
-    if (!resolvedStateCode) return setError('State is required. Enter a valid state code or name.')
+    if (!resolvedStateCode) {
+      setError('State is required. Enter a valid state code or name.')
+      return
+    }
 
     setSaving(true)
     const supabase = supabaseBrowser()
@@ -182,8 +326,7 @@ export default function EmployerSignupDetailsPage() {
 
     if (!user.email_confirmed_at) {
       setSaving(false)
-      window.location.href =
-        '/verify-required?next=%2Fsignup%2Femployer%2Fdetails&action=signup_profile_completion'
+      window.location.href = '/verify-required?next=%2Fsignup%2Femployer%2Fdetails&action=signup_profile_completion'
       return
     }
 
@@ -194,14 +337,42 @@ export default function EmployerSignupDetailsPage() {
       .maybeSingle<{ verified: boolean | null }>()
 
     if (usersRow?.verified !== true) {
-      setSaving(false)
-      window.location.href =
-        '/verify-required?next=%2Fsignup%2Femployer%2Fdetails&action=signup_profile_completion'
-      return
+      await supabase.from('users').update({ verified: true }).eq('id', user.id).eq('verified', false)
+    }
+
+    let avatarUrl = logoUrl.trim()
+    if (logoFile) {
+      const uploadPath = `employers/${user.id}/avatar-${Date.now()}-${logoFile.name.replace(/[^a-zA-Z0-9._-]/g, '-')}`
+      let uploaded = false
+      let uploadMessage = 'Unable to upload logo right now. Please try again.'
+
+      for (const bucket of profilePhotoBuckets) {
+        const { error: uploadError } = await supabase.storage.from(bucket).upload(uploadPath, logoFile, {
+          contentType: logoFile.type || 'image/jpeg',
+          upsert: true,
+        })
+
+        if (uploadError) {
+          uploadMessage = uploadError.message
+          continue
+        }
+
+        const { data: urlData } = supabase.storage.from(bucket).getPublicUrl(uploadPath)
+        avatarUrl = urlData.publicUrl
+        uploaded = true
+        break
+      }
+
+      if (!uploaded) {
+        setSaving(false)
+        setError(toUserFacingErrorMessage(uploadMessage))
+        return
+      }
     }
 
     const fullName = `${firstName.trim()} ${lastName.trim()}`.trim()
     const foundedDateValue = toFoundedDateValue(foundedYear)
+
     const [{ error: userError }, { error: profileError }, { error: publicProfileError }, { error: authError }] = await Promise.all([
       supabase.from('users').upsert(
         {
@@ -222,6 +393,8 @@ export default function EmployerSignupDetailsPage() {
           location_city: locationCity.trim(),
           location_state: resolvedStateCode,
           location_address_line1: address.trim(),
+          overview: description.trim() || null,
+          avatar_url: avatarUrl || null,
         },
         { onConflict: 'user_id' }
       ),
@@ -234,6 +407,8 @@ export default function EmployerSignupDetailsPage() {
           founded_date: foundedDateValue,
           location_city: locationCity.trim(),
           location_state: resolvedStateCode,
+          about_us: description.trim() || null,
+          avatar_url: avatarUrl || null,
           updated_at: new Date().toISOString(),
         },
         { onConflict: 'employer_id' }
@@ -254,7 +429,26 @@ export default function EmployerSignupDetailsPage() {
     if (publicProfileError) return setError(toUserFacingErrorMessage(publicProfileError.message))
     if (authError) return setError(toUserFacingErrorMessage(authError.message))
 
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(EMPLOYER_DRAFT_KEY)
+    }
+
     window.location.href = '/dashboard/employer'
+  }
+
+  function handleNext() {
+    setError(null)
+    const validationError = validateStep(stepIndex)
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+    setStepIndex((prev) => Math.min(prev + 1, EMPLOYER_STEPS - 1))
+  }
+
+  function handleBack() {
+    setError(null)
+    setStepIndex((prev) => Math.max(prev - 1, 0))
   }
 
   if (initializing) {
@@ -279,133 +473,103 @@ export default function EmployerSignupDetailsPage() {
         </Link>
 
         <h1 className="mt-4 text-2xl font-semibold text-slate-900">Employer profile details</h1>
-        <p className="mt-2 text-slate-600">Step 2 of 2: complete your company profile.</p>
+        <p className="mt-2 text-slate-600">You&apos;re 2 minutes away from publishing trusted internship opportunities.</p>
 
-        <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="mt-4 grid gap-5 sm:grid-cols-2">
-            <div>
-              <label className="text-sm font-medium text-slate-700">First name</label>
-              <input
-                className={FIELD}
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
-                placeholder="Jane"
-              />
-            </div>
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <EmployerProgressBar currentStep={stepIndex + 1} totalSteps={EMPLOYER_STEPS} />
 
-            <div>
-              <label className="text-sm font-medium text-slate-700">Last name</label>
-              <input
-                className={FIELD}
-                value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
-                placeholder="Doe"
-              />
-            </div>
+          <div className="mt-6">
+            <h2 className="text-lg font-semibold text-slate-900">
+              {stepIndex === 0 ? 'Company basics' : stepIndex === 1 ? 'Hiring context' : 'Profile details'}
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              {stepIndex === 0
+                ? 'This helps students quickly understand who you are.'
+                : stepIndex === 1
+                  ? 'A bit of context improves candidate quality.'
+                  : 'Finish your profile so candidates can trust and engage.'}
+            </p>
+          </div>
 
-            <div className="sm:col-span-2">
-              <label className="text-sm font-medium text-slate-700">Company name</label>
-              <input
-                className={FIELD}
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
-                placeholder="e.g., Canyon Capital"
+          <div key={stepIndex} className="mt-6 transition-all duration-300 ease-out">
+            {stepIndex === 0 ? (
+              <EmployerStep1
+                fieldClassName={FIELD}
+                firstName={firstName}
+                lastName={lastName}
+                companyName={companyName}
+                industry={industry}
+                website={website}
+                onFirstNameChange={setFirstName}
+                onLastNameChange={setLastName}
+                onCompanyNameChange={setCompanyName}
+                onIndustryChange={setIndustry}
+                onWebsiteChange={setWebsite}
               />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="text-sm font-medium text-slate-700">Address</label>
-              <input
-                className={FIELD}
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="123 Main St"
+            ) : stepIndex === 1 ? (
+              <EmployerStep2
+                fieldClassName={FIELD}
+                companySize={companySize}
+                internshipTypes={internshipTypes}
+                typicalDuration={typicalDuration}
+                contactEmail={contactEmail}
+                foundedYear={foundedYear}
+                onCompanySizeChange={setCompanySize}
+                onInternshipTypesChange={setInternshipTypes}
+                onTypicalDurationChange={setTypicalDuration}
+                onContactEmailChange={setContactEmail}
+                onFoundedYearChange={setFoundedYear}
               />
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-slate-700">City</label>
-              <input
-                className={FIELD}
-                value={locationCity}
-                onChange={(e) => setLocationCity(e.target.value)}
-                placeholder="e.g., Salt Lake City"
+            ) : (
+              <EmployerStep3
+                fieldClassName={FIELD}
+                address={address}
+                locationCity={locationCity}
+                locationStateInput={locationStateInput}
+                description={description}
+                logoFile={logoFile}
+                existingLogoUrl={logoUrl}
+                onAddressChange={setAddress}
+                onLocationCityChange={setLocationCity}
+                onLocationStateInputChange={setLocationStateInput}
+                onDescriptionChange={setDescription}
+                onLogoChange={setLogoFile}
               />
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-slate-700">State</label>
-              <input
-                className={FIELD}
-                value={locationStateInput}
-                onChange={(e) => setLocationStateInput(e.target.value)}
-                placeholder="UT or Utah"
-                list="state-options"
-              />
-              <datalist id="state-options">
-                {US_STATE_OPTIONS.map((option) => (
-                  <option key={option.code} value={option.code}>
-                    {option.name}
-                  </option>
-                ))}
-              </datalist>
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="text-sm font-medium text-slate-700">Website</label>
-              <input
-                className={FIELD}
-                value={website}
-                onChange={(e) => setWebsite(e.target.value)}
-                placeholder="https://example.com"
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="text-sm font-medium text-slate-700">Contact email</label>
-              <input
-                type="email"
-                className={FIELD}
-                value={contactEmail}
-                onChange={(e) => setContactEmail(e.target.value)}
-                placeholder="name@company.com"
-              />
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-slate-700">Industry</label>
-              <input
-                className={FIELD}
-                value={industry}
-                onChange={(e) => setIndustry(e.target.value)}
-                placeholder="e.g., Finance"
-              />
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-slate-700">Founded year (optional)</label>
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={4}
-                className={FIELD}
-                value={foundedYear}
-                onChange={(e) => setFoundedYear(e.target.value.replace(/[^0-9]/g, '').slice(0, 4))}
-                placeholder="2018"
-              />
-            </div>
+            )}
           </div>
 
           {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
 
-          <button
-            type="button"
-            onClick={saveProfileDetails}
-            disabled={saving}
-            className="mt-6 w-full rounded-md bg-blue-600 px-5 py-3 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
-          >
-            {saving ? 'Saving...' : 'Finish signup'}
-          </button>
+          <div className="mt-8 flex items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={handleBack}
+              disabled={stepIndex === 0 || saving}
+              className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Back
+            </button>
+
+            {stepIndex < EMPLOYER_STEPS - 1 ? (
+              <button
+                type="button"
+                onClick={handleNext}
+                disabled={!canContinue || saving}
+                className="rounded-md bg-blue-600 px-5 py-3 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Next
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={saveProfileDetails}
+                disabled={!canContinue || saving}
+                className="rounded-md bg-blue-600 px-5 py-3 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {saving ? 'Saving...' : 'Finish signup'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </main>

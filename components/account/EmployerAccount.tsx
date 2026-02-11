@@ -58,6 +58,7 @@ type Props = {
   initialPublicProfile: EmployerPublicProfileRow | null
   recentInternships: InternshipRow[]
   planId: EmployerPlanId
+  isVerifiedEmployer: boolean
   isEmailVerified: boolean
 }
 
@@ -119,6 +120,7 @@ export default function EmployerAccount({
   initialPublicProfile,
   recentInternships,
   planId,
+  isVerifiedEmployer,
   isEmailVerified,
 }: Props) {
   const canCustomizeHeader = planId === 'starter' || planId === 'pro'
@@ -416,11 +418,17 @@ export default function EmployerAccount({
                   <h2 className="truncate text-3xl font-semibold text-slate-900">
                     {companyName.trim() || 'Company name not set'}
                   </h2>
-                  {isEmailVerified ? (
+                  {isVerifiedEmployer ? (
                     <EmployerVerificationBadge tier={planId} />
                   ) : (
-                    <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
-                      Email not verified
+                    <span
+                      className={`rounded-full border px-3 py-1 text-xs font-medium ${
+                        isEmailVerified
+                          ? 'border-slate-200 bg-slate-50 text-slate-700'
+                          : 'border-amber-200 bg-amber-50 text-amber-700'
+                      }`}
+                    >
+                      {isEmailVerified ? 'Email confirmed' : 'Email not verified'}
                     </span>
                   )}
                 </div>

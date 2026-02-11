@@ -1,9 +1,39 @@
 import Stripe from 'stripe'
-import { getStripeClient } from '@/lib/billing/stripe'
+import { getStripeClient, getStripeWebhookSecretForMode } from '@/lib/billing/stripe'
 import { isVerifiedEmployerStatus, resolveEmployerPlan } from '@/lib/billing/subscriptions'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 export const runtime = 'nodejs'
+
+async function hasProcessedEvent(eventId: string) {
+  const supabase = supabaseAdmin()
+  const { data, error } = await supabase
+    .from('stripe_webhook_events')
+    .select('event_id')
+    .eq('event_id', eventId)
+    .maybeSingle()
+  if (error) {
+    throw new Error(error.message)
+  }
+  return Boolean((data as { event_id?: string } | null)?.event_id)
+}
+
+async function markEventProcessed(event: Stripe.Event) {
+  const supabase = supabaseAdmin()
+  const { error } = await supabase
+    .from('stripe_webhook_events')
+    .upsert(
+      {
+        event_id: event.id,
+        type: event.type,
+      },
+      { onConflict: 'event_id' }
+    )
+
+  if (error) {
+    throw new Error(error.message)
+  }
+}
 
 function unixSecondsToIso(value: number | null | undefined) {
   if (!value) return null
@@ -53,10 +83,25 @@ async function upsertSubscription(params: {
   }
 
   const plan = resolveEmployerPlan({ status, priceId })
-  const employerVerificationTier = isVerifiedEmployerStatus(status) ? plan.id : 'free'
+  const paidVerifiedTier = isVerifiedEmployerStatus(status) && plan.id === 'pro'
+  const { data: employerProfile } = await supabase
+    .from('employer_profiles')
+    .select('verified_employer_manual_override')
+    .eq('user_id', userId)
+    .maybeSingle()
+  const hasManualOverride = Boolean(
+    (employerProfile as { verified_employer_manual_override?: boolean | null } | null)
+      ?.verified_employer_manual_override
+  )
+  const verifiedEmployer = paidVerifiedTier || hasManualOverride
+  const employerVerificationTier = verifiedEmployer ? 'pro' : 'free'
+
   await supabase
     .from('employer_profiles')
-    .update({ email_alerts_enabled: isVerifiedEmployerStatus(status) && plan.emailAlertsEnabled })
+    .update({
+      email_alerts_enabled: isVerifiedEmployerStatus(status) && plan.emailAlertsEnabled,
+      verified_employer: verifiedEmployer,
+    })
     .eq('user_id', userId)
 
   await supabase
@@ -135,9 +180,12 @@ async function handleSubscriptionUpdatedOrDeleted(event: Stripe.Event) {
 }
 
 export async function POST(request: Request) {
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET
-  if (!webhookSecret) {
-    return new Response('Missing STRIPE_WEBHOOK_SECRET', { status: 500 })
+  let webhookSecret = ''
+  try {
+    webhookSecret = getStripeWebhookSecretForMode()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Missing webhook secret'
+    return new Response(message, { status: 500 })
   }
 
   const signature = request.headers.get('stripe-signature')
@@ -156,6 +204,10 @@ export async function POST(request: Request) {
   }
 
   try {
+    if (await hasProcessedEvent(event.id)) {
+      return Response.json({ received: true, duplicate: true })
+    }
+
     if (event.type === 'checkout.session.completed') {
       await handleCheckoutSessionCompleted(event)
     }
@@ -163,6 +215,8 @@ export async function POST(request: Request) {
     if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
       await handleSubscriptionUpdatedOrDeleted(event)
     }
+
+    await markEventProcessed(event)
 
     return Response.json({ received: true })
   } catch (error) {
