@@ -87,7 +87,17 @@ export async function resolvePostAuthRedirect(params: {
     .maybeSingle<RoleLookupRow>()
 
   const role = isUserRole(userRow?.role) ? userRow.role : null
-  const isVerificationComplete = userRow?.verified === true
+  let isVerificationComplete = userRow?.verified === true
+  if (!isVerificationComplete && Boolean(authUser?.email_confirmed_at)) {
+    const { error: markVerifiedError } = await params.supabase
+      .from('users')
+      .update({ verified: true })
+      .eq('id', params.userId)
+      .eq('verified', false)
+    if (!markVerifiedError) {
+      isVerificationComplete = true
+    }
+  }
   if (!isVerificationComplete) {
     const verifyNext = normalizedNext ?? (isAppRole(role) ? signupDetailsPathForRole(role) : '/account')
     return {

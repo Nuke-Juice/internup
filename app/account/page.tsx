@@ -157,7 +157,17 @@ export default async function AccountPage() {
     .maybeSingle()
 
   const role: UserRole | null = isUserRole(userRow?.role) ? userRow.role : null
-  const isVerificationComplete = userRow?.verified === true
+  let isVerificationComplete = userRow?.verified === true
+  if (!isVerificationComplete && Boolean(user.email_confirmed_at)) {
+    const { error: markVerifiedError } = await supabase
+      .from('users')
+      .update({ verified: true })
+      .eq('id', user.id)
+      .eq('verified', false)
+    if (!markVerifiedError) {
+      isVerificationComplete = true
+    }
+  }
 
   if (!isVerificationComplete) {
     const verifyHref = `${buildVerifyRequiredHref('/account', 'signup_email_verification_pending')}&email=${encodeURIComponent(user.email ?? '')}`
