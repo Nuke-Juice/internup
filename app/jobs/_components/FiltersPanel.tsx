@@ -5,6 +5,7 @@ import { ChevronDown } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 
 type FilterState = {
+  searchQuery: string
   category: string
   payMin: string
   remoteOnly: boolean
@@ -52,6 +53,7 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
     const merged: FilterState = { ...state, ...overrides }
     const params = new URLSearchParams()
 
+    if (merged.searchQuery) params.set('q', merged.searchQuery)
     if (merged.category) params.set('category', merged.category)
     if (merged.payMin) params.set('paymin', merged.payMin)
     if (merged.remoteOnly) params.set('remote', '1')
@@ -124,6 +126,7 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
         <h2 className="text-sm font-semibold text-slate-900">Filters</h2>
         <Link
           href={href({
+            searchQuery: '',
             category: '',
             payMin: '',
             remoteOnly: false,
@@ -177,6 +180,7 @@ export default function FiltersPanel({ categories, verifiedLocations, state, bas
         </section>
 
         <form action={submitAction} className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+          {state.searchQuery ? <input type="hidden" name="q" value={state.searchQuery} /> : null}
           {state.category ? <input type="hidden" name="category" value={state.category} /> : null}
           {state.remoteOnly ? <input type="hidden" name="remote" value="1" /> : null}
           {state.experience ? <input type="hidden" name="exp" value={state.experience} /> : null}

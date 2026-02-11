@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react'
 import { requireAnyRole } from '@/lib/auth/requireAnyRole'
 import { ADMIN_ROLES } from '@/lib/auth/roles'
 import { deleteUserAccountById } from '@/lib/auth/accountDeletion'
+import { parseStudentPreferenceSignals } from '@/lib/student/preferenceSignals'
 import { hasSupabaseAdminCredentials, supabaseAdmin } from '@/lib/supabase/admin'
 
 type SearchParams = Promise<{ q?: string; success?: string; error?: string }>
@@ -15,6 +16,7 @@ type StudentRow = {
   majors: string[] | string | null
   year: string | null
   experience_level: string | null
+  interests: string | null
   availability_start_month: string | null
   availability_hours_per_week: number | null
 }
@@ -24,6 +26,10 @@ type StudentViewRow = StudentRow & {
   email: string
   major_label: string
   availability_label: string
+  canonical_skill_labels: string[]
+  coursework_category_names: string[]
+  missing_match_dimensions: string[]
+  coverage_label: string
 }
 
 function canonicalMajorName(value: unknown) {
@@ -62,6 +68,19 @@ function formatAvailability(startMonth: string | null, hours: number | null) {
   return `${month} · ${hoursLabel}`
 }
 
+function parseMajors(value: string[] | string | null | undefined) {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return value
+      .split(',')
+      .map((token) => token.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
 export default async function AdminStudentsPage({ searchParams }: { searchParams?: SearchParams }) {
   await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/students' })
   const resolvedSearchParams = searchParams ? await searchParams : undefined
@@ -84,11 +103,62 @@ export default async function AdminStudentsPage({ searchParams }: { searchParams
   const query = admin
     .from('student_profiles')
     .select(
-      'user_id, school, major:canonical_majors(name), majors, year, experience_level, availability_start_month, availability_hours_per_week'
+      'user_id, school, major:canonical_majors(name), majors, year, experience_level, interests, availability_start_month, availability_hours_per_week'
     )
     .limit(200)
   const { data } = await query
   const students = (data ?? []) as StudentRow[]
+
+  const [skillRowsResult, courseworkCategoryRowsResult] = await Promise.all([
+    students.length > 0
+      ? admin
+          .from('student_skill_items')
+          .select('student_id, skill:skills(label)')
+          .in('student_id', students.map((row) => row.user_id))
+      : Promise.resolve({
+          data: [] as Array<{ student_id: string | null; skill: { label?: string | null } | Array<{ label?: string | null }> | null }>,
+        }),
+    students.length > 0
+      ? admin
+          .from('student_coursework_category_links')
+          .select('student_id, category:coursework_categories(name)')
+          .in('student_id', students.map((row) => row.user_id))
+      : Promise.resolve({
+          data: [] as Array<{ student_id: string | null; category: { name?: string | null } | Array<{ name?: string | null }> | null }>,
+        }),
+  ])
+
+  const canonicalSkillsByStudentId = new Map<string, string[]>()
+  for (const row of (skillRowsResult.data ?? []) as Array<{ student_id: string | null; skill: { label?: string | null } | Array<{ label?: string | null }> | null }>) {
+    if (!row.student_id) continue
+    const labels = Array.isArray(row.skill)
+      ? row.skill
+          .map((entry) => (typeof entry?.label === 'string' ? entry.label.trim() : ''))
+          .filter(Boolean)
+      : typeof row.skill?.label === 'string'
+        ? [row.skill.label.trim()]
+        : []
+    if (labels.length === 0) continue
+    const next = canonicalSkillsByStudentId.get(row.student_id) ?? []
+    next.push(...labels)
+    canonicalSkillsByStudentId.set(row.student_id, next)
+  }
+
+  const courseworkCategoriesByStudentId = new Map<string, string[]>()
+  for (const row of (courseworkCategoryRowsResult.data ?? []) as Array<{ student_id: string | null; category: { name?: string | null } | Array<{ name?: string | null }> | null }>) {
+    if (!row.student_id) continue
+    const labels = Array.isArray(row.category)
+      ? row.category
+          .map((entry) => (typeof entry?.name === 'string' ? entry.name.trim() : ''))
+          .filter(Boolean)
+      : typeof row.category?.name === 'string'
+        ? [row.category.name.trim()]
+        : []
+    if (labels.length === 0) continue
+    const next = courseworkCategoriesByStudentId.get(row.student_id) ?? []
+    next.push(...labels)
+    courseworkCategoriesByStudentId.set(row.student_id, next)
+  }
 
   const authUsersEntries = await Promise.all(
     students.map(async (student) => {
@@ -102,6 +172,25 @@ export default async function AdminStudentsPage({ searchParams }: { searchParams
     const authUser = authUserByStudentId.get(row.user_id)
     const metadata = (authUser?.user_metadata ?? {}) as { first_name?: string; last_name?: string }
     const major = formatMajor(row.majors, canonicalMajorName(row.major))
+    const canonicalSkillLabels = Array.from(new Set(canonicalSkillsByStudentId.get(row.user_id) ?? []))
+    const courseworkCategoryNames = Array.from(new Set(courseworkCategoriesByStudentId.get(row.user_id) ?? []))
+    const preferences = parseStudentPreferenceSignals(row.interests)
+    const majorTokens = parseMajors(row.majors)
+    const hasHours = typeof row.availability_hours_per_week === 'number' && row.availability_hours_per_week > 0
+    const hasTerm = preferences.preferredTerms.length > 0 || Boolean(row.availability_start_month?.trim())
+    const hasLocationOrMode = preferences.preferredLocations.length > 0 || preferences.preferredWorkModes.length > 0
+    const checks = [
+      ['majors', majorTokens.length > 0 || major !== 'Major not set'],
+      ['skills', canonicalSkillLabels.length > 0],
+      ['coursework categories', courseworkCategoryNames.length > 0],
+      ['term', hasTerm],
+      ['hours', hasHours],
+      ['location/work mode', hasLocationOrMode],
+      ['grad year', Boolean(row.year?.trim())],
+      ['experience', Boolean(row.experience_level?.trim())],
+    ] as const
+    const missingDimensions = checks.filter(([, ok]) => !ok).map(([label]) => label)
+    const coverageLabel = `${checks.filter(([, ok]) => ok).length}/${checks.length}`
     const viewRow: StudentViewRow = {
       ...row,
       name: nameFromAuthMetadata({
@@ -113,6 +202,10 @@ export default async function AdminStudentsPage({ searchParams }: { searchParams
       email: authUser?.email ?? 'Email not set',
       major_label: major,
       availability_label: formatAvailability(row.availability_start_month, row.availability_hours_per_week),
+      canonical_skill_labels: canonicalSkillLabels,
+      coursework_category_names: courseworkCategoryNames,
+      missing_match_dimensions: missingDimensions,
+      coverage_label: coverageLabel,
     }
     return viewRow
   })
@@ -128,6 +221,9 @@ export default async function AdminStudentsPage({ searchParams }: { searchParams
       row.year ?? '',
       row.experience_level ?? '',
       row.availability_label,
+      row.canonical_skill_labels.join(' '),
+      row.coursework_category_names.join(' '),
+      row.missing_match_dimensions.join(' '),
       row.user_id,
     ]
       .join(' ')
@@ -213,13 +309,15 @@ export default async function AdminStudentsPage({ searchParams }: { searchParams
                   <th className="px-3 py-2">Year</th>
                   <th className="px-3 py-2">Experience level</th>
                   <th className="px-3 py-2">Availability</th>
+                  <th className="px-3 py-2">Canonical selections</th>
+                  <th className="px-3 py-2">Match coverage</th>
                   <th className="px-3 py-2">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-3 py-8 text-center text-sm text-slate-500">
+                    <td colSpan={9} className="px-3 py-8 text-center text-sm text-slate-500">
                       No student profiles found.
                     </td>
                   </tr>
@@ -236,17 +334,43 @@ export default async function AdminStudentsPage({ searchParams }: { searchParams
                       <td className="px-3 py-2 text-slate-700">{row.year ?? 'n/a'}</td>
                       <td className="px-3 py-2 text-slate-700">{row.experience_level ?? 'n/a'}</td>
                       <td className="px-3 py-2 text-slate-700">{row.availability_label}</td>
+                      <td className="px-3 py-2 text-xs text-slate-700">
+                        <div>Skills: {row.canonical_skill_labels.slice(0, 3).join(', ') || 'none'}</div>
+                        <div>Coursework categories: {row.coursework_category_names.slice(0, 2).join(', ') || 'none'}</div>
+                      </td>
+                      <td className="px-3 py-2 text-xs text-slate-700">
+                        <div
+                          className={`inline-flex rounded-full border px-2 py-0.5 font-medium ${
+                            row.missing_match_dimensions.length === 0
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                              : 'border-amber-300 bg-amber-50 text-amber-700'
+                          }`}
+                        >
+                          {row.coverage_label}
+                        </div>
+                        <div className="mt-1 text-slate-600">
+                          Missing: {row.missing_match_dimensions.join(', ') || 'none'}
+                        </div>
+                      </td>
                       <td className="px-3 py-2">
-                        <form action={deleteStudentAccountAction}>
-                          <input type="hidden" name="student_id" value={row.user_id} />
-                          <input type="hidden" name="q" value={q} />
-                          <button
-                            type="submit"
-                            className="rounded-md border border-red-300 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Link
+                            href={`/admin/matching/preview?student=${encodeURIComponent(row.user_id)}`}
+                            className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
                           >
-                            Delete account
-                          </button>
-                        </form>
+                            Preview matches
+                          </Link>
+                          <form action={deleteStudentAccountAction}>
+                            <input type="hidden" name="student_id" value={row.user_id} />
+                            <input type="hidden" name="q" value={q} />
+                            <button
+                              type="submit"
+                              className="rounded-md border border-red-300 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
+                            >
+                              Delete account
+                            </button>
+                          </form>
+                        </div>
                       </td>
                     </tr>
                   ))

@@ -22,6 +22,7 @@ const categoryTiles = [
 ]
 
 export type JobsQuery = {
+  q?: string
   category?: string
   paymin?: string
   remote?: string
@@ -102,8 +103,8 @@ function getStudentProfileCompletion(profile: {
   experience_level?: string | null
   availability_start_month?: string | null
   availability_hours_per_week?: number | string | null
-} | null) {
-  if (!profile) return { completed: 0, total: 7, percent: 0, isComplete: false }
+} | null, hasIdentityName = false) {
+  if (!profile) return { completed: 0, total: 8, percent: 0, isComplete: false }
 
   const majorName = canonicalMajorName(profile.major)
   const majors = majorName ? parseMajors([majorName]) : parseMajors(profile.majors ?? null)
@@ -132,7 +133,16 @@ function getStudentProfileCompletion(profile: {
       ? profile.availability_hours_per_week > 0
       : typeof profile.availability_hours_per_week === 'string' && profile.availability_hours_per_week.trim().length > 0
 
-  const checks = [hasUniversity, majors.length > 0, hasYear, hasExperience, hasStartMonth, hasHours, coursework.length > 0]
+  const checks = [
+    hasIdentityName,
+    hasUniversity,
+    majors.length > 0,
+    hasYear,
+    hasExperience,
+    hasStartMonth,
+    hasHours,
+    coursework.length > 0,
+  ]
   const completed = checks.filter(Boolean).length
   const total = checks.length
   const percent = Math.round((completed / total) * 100)
@@ -185,6 +195,8 @@ export default async function JobsView({
 }: JobsViewProps) {
   const showBrowseHeroButton = basePath !== '/'
   const resolvedSearchParams = ((searchParams ? await Promise.resolve(searchParams) : {}) ?? {}) as JobsQuery
+  const searchQuery = (resolvedSearchParams.q ?? '').trim()
+  const normalizedSearchQuery = searchQuery.toLowerCase()
   const activeCategory = resolvedSearchParams.category ?? ''
   const payMin = resolvedSearchParams.paymin ?? ''
   const remoteOnly = resolvedSearchParams.remote === '1'
@@ -255,6 +267,17 @@ export default async function JobsView({
   let profileCompletionPercent = 0
 
   if (user) {
+    const userMetadata = (user.user_metadata ?? {}) as { first_name?: string; last_name?: string; full_name?: string }
+    const hasIdentityName =
+      (typeof userMetadata.first_name === 'string' &&
+        userMetadata.first_name.trim().length > 0 &&
+        typeof userMetadata.last_name === 'string' &&
+        userMetadata.last_name.trim().length > 0) ||
+      (typeof userMetadata.full_name === 'string' &&
+        userMetadata.full_name
+          .split(/\s+/)
+          .map((token) => token.trim())
+          .filter(Boolean).length >= 2)
     const { data: userRow } = await supabase
       .from('users')
       .select('role')
@@ -311,7 +334,7 @@ export default async function JobsView({
       .filter((value): value is string => typeof value === 'string')
 
     if (role === 'student') {
-      const completion = getStudentProfileCompletion(profile ?? null)
+      const completion = getStudentProfileCompletion(profile ?? null, hasIdentityName)
       profileCompletionPercent = completion.percent
       showCompleteProfileBanner = !completion.isComplete
     }
@@ -388,6 +411,9 @@ export default async function JobsView({
   const filteredInternships = sortedInternships.filter((listing) => {
     const listingMajors = parseMajors(listing.majors)
     const normalizedTitle = listing.title?.toLowerCase() ?? ''
+    const normalizedCompany = listing.company_name?.toLowerCase() ?? ''
+    const normalizedDescription = listing.description?.toLowerCase() ?? ''
+    const normalizedCategoryText = (listing.category ?? listing.role_category ?? '').toLowerCase()
     const isRemote = (listing.location ?? '').toLowerCase().includes('remote')
     const listingExperience = (listing.experience_level ?? '').toLowerCase()
     const parsedMinHours = hoursMin ? Number(hoursMin) : null
@@ -397,6 +423,16 @@ export default async function JobsView({
     const listingCity = (listing.location_city ?? '').toLowerCase()
     const listingState = (listing.location_state ?? '').toLowerCase()
     const listingLocation = (listing.location ?? '').toLowerCase()
+
+    if (normalizedSearchQuery) {
+      const internshipMatches =
+        normalizedTitle.includes(normalizedSearchQuery) ||
+        normalizedDescription.includes(normalizedSearchQuery) ||
+        normalizedCategoryText.includes(normalizedSearchQuery)
+      const employerMatches = normalizedCompany.includes(normalizedSearchQuery)
+
+      if (!internshipMatches && !employerMatches) return false
+    }
 
     if (activeCategory) {
       const normalizedCategory = activeCategory.toLowerCase()
@@ -584,6 +620,7 @@ export default async function JobsView({
             categories={categoryTiles}
             verifiedLocations={verifiedLocations}
             state={{
+              searchQuery,
               category: activeCategory,
               payMin,
               remoteOnly,
@@ -626,7 +663,7 @@ export default async function JobsView({
                     </div>
                     <h3 className="mt-4 text-xl font-semibold text-slate-900">No matches for these filters</h3>
                     <p className="mt-2 text-sm text-slate-600">
-                      Try clearing filters or browsing all internships to see the newest opportunities.
+                      Try clearing filters or adjusting your search to see matching opportunities.
                     </p>
                     <div className="mt-5 flex flex-col items-center justify-center gap-2 sm:flex-row">
                       <Link
@@ -653,7 +690,7 @@ export default async function JobsView({
                         Browse all internships
                       </Link>
                     </div>
-                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <div className={`mt-4 grid gap-4 ${newestInternships.length > 1 ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
                       {newestInternships.map((listing) => (
                         <JobCard
                           key={listing.id}

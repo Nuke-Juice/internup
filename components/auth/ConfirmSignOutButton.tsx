@@ -8,12 +8,14 @@ type Props = {
   className?: string
   confirmMessage?: string
   label?: string
+  redirectTo?: string
 }
 
 export default function ConfirmSignOutButton({
   className = 'rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50',
   confirmMessage = 'Are you sure you want to sign out?',
   label = 'Sign out',
+  redirectTo = '/',
 }: Props) {
   const router = useRouter()
   const [signingOut, setSigningOut] = useState(false)
@@ -25,7 +27,7 @@ export default function ConfirmSignOutButton({
     await supabase.auth.signOut()
     setSigningOut(false)
     setConfirmOpen(false)
-    router.push('/')
+    router.push(redirectTo)
     router.refresh()
   }
 

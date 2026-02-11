@@ -58,6 +58,27 @@ async function isOnboardingComplete(supabase: SupabaseClient, userId: string, ro
   return isNonEmpty(profile?.company_name) && isNonEmpty(profile?.location_address_line1)
 }
 
+function hasIdentityName(user: { user_metadata?: Record<string, unknown> | null } | null | undefined) {
+  const metadata = (user?.user_metadata ?? {}) as {
+    first_name?: string
+    last_name?: string
+    full_name?: string
+  }
+
+  const hasSplitName =
+    typeof metadata.first_name === 'string' &&
+    metadata.first_name.trim().length > 0 &&
+    typeof metadata.last_name === 'string' &&
+    metadata.last_name.trim().length > 0
+
+  if (hasSplitName) return true
+  if (typeof metadata.full_name !== 'string') return false
+  return metadata.full_name
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean).length >= 2
+}
+
 export async function resolvePostAuthRedirect(params: {
   supabase: SupabaseClient
   userId: string
@@ -132,7 +153,7 @@ export async function resolvePostAuthRedirect(params: {
   }
 
   const onboardingComplete = await isOnboardingComplete(params.supabase, params.userId, role)
-  if (!onboardingComplete) {
+  if (!onboardingComplete || !hasIdentityName(authUser as { user_metadata?: Record<string, unknown> | null })) {
     const onboardingPath = signupDetailsPathForRole(role)
     return {
       destination: onboardingPath,

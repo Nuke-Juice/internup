@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "matching:sanity": "node --experimental-strip-types scripts/matching-sanity.mjs",
-    "test": "node --experimental-strip-types --experimental-specifier-resolution=node --test tests/*.test.ts"
+    "test": "node --experimental-strip-types --experimental-specifier-resolution=node --test tests/*.test.ts",
+    "courses:scrape": "node scripts/sync-university-course-catalog.mjs",
+    "courses:scrape:dry": "node scripts/sync-university-course-catalog.mjs --dry-run",
+    "courses:import:utah": "node scripts/import-utah-course-reports.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.8.0",

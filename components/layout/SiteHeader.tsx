@@ -2,9 +2,9 @@
 
 import Link from 'next/link'
 import Image from 'next/image'
-import { usePathname, useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
-import { Bell, FileText, LayoutDashboard, LogIn, Mail, ShieldCheck, User } from 'lucide-react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { type FormEvent, useEffect, useState } from 'react'
+import { Bell, FileText, LayoutDashboard, LogIn, Mail, Menu, ShieldCheck, User, X } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
 import { isAdminRole, type UserRole } from '@/lib/auth/roles'
 import { useToast } from '@/components/feedback/ToastProvider'
@@ -13,7 +13,16 @@ type SiteHeaderProps = {
   isAuthenticated: boolean
   role?: UserRole
   email?: string | null
+  avatarUrl?: string | null
   isEmailVerified?: boolean
+  showFinishProfilePrompt?: boolean
+  finishProfileHref?: string | null
+}
+
+type SearchSuggestion = {
+  label: string
+  value: string
+  kind: 'employer' | 'internship'
 }
 
 function navClasses(isActive: boolean) {
@@ -44,13 +53,26 @@ function textLinkClasses(isActive: boolean) {
   return `text-sm font-medium transition-colors ${isActive ? 'text-slate-900' : 'text-slate-600 hover:text-slate-900'}`
 }
 
-export default function SiteHeader({ isAuthenticated, role, email, isEmailVerified = true }: SiteHeaderProps) {
+export default function SiteHeader({
+  isAuthenticated,
+  role,
+  email,
+  avatarUrl = null,
+  isEmailVerified = true,
+  showFinishProfilePrompt = false,
+  finishProfileHref = null,
+}: SiteHeaderProps) {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const router = useRouter()
-  const [showEmployerModal, setShowEmployerModal] = useState(false)
-  const [signingOut, setSigningOut] = useState(false)
   const [resendingVerification, setResendingVerification] = useState(false)
   const [resendCooldown, setResendCooldown] = useState(0)
+  const [menuSearchQuery, setMenuSearchQuery] = useState('')
+  const [searchSuggestions, setSearchSuggestions] = useState<SearchSuggestion[]>([])
+  const [searchSuggestionsOpen, setSearchSuggestionsOpen] = useState(false)
+  const [onboardingPromptDismissed, setOnboardingPromptDismissed] = useState(false)
+  const [headerAvatarUrl, setHeaderAvatarUrl] = useState<string | null>(avatarUrl)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const { showToast } = useToast()
 
   const homeActive = pathname === '/' || pathname.startsWith('/jobs')
@@ -61,8 +83,7 @@ export default function SiteHeader({ isAuthenticated, role, email, isEmailVerifi
   const adminActive = pathname.startsWith('/admin')
   const applicationsActive = pathname.startsWith('/applications')
   const dashboardActive = pathname.startsWith('/dashboard/employer')
-  const applicantsActive = pathname.startsWith('/dashboard/employer/applicants')
-  const employersActive = pathname.startsWith('/signup/employer')
+  const employersActive = pathname.startsWith('/signup/employer') || pathname.startsWith('/for-employers')
   const loginActive = pathname.startsWith('/login')
   const upgradeActive = pathname.startsWith('/upgrade')
   const isAdmin = isAdminRole(role)
@@ -77,29 +98,118 @@ export default function SiteHeader({ isAuthenticated, role, email, isEmailVerifi
     return () => clearTimeout(timer)
   }, [resendCooldown])
 
-  function handleEmployerTarget(path: string) {
-    if (isAuthenticated && role === 'student') {
-      setShowEmployerModal(true)
+  useEffect(() => {
+    const query = (searchParams.get('q') ?? '').trim()
+    setMenuSearchQuery(query)
+  }, [searchParams])
+
+  useEffect(() => {
+    setHeaderAvatarUrl(avatarUrl)
+  }, [avatarUrl])
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setHeaderAvatarUrl(null)
       return
     }
-    router.push(path)
+
+    const supabase = supabaseBrowser()
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      const metadata = (session?.user?.user_metadata ?? {}) as { avatar_url?: string }
+      if (typeof metadata.avatar_url === 'string' && metadata.avatar_url.trim().length > 0) {
+        setHeaderAvatarUrl(metadata.avatar_url)
+      } else {
+        setHeaderAvatarUrl(null)
+      }
+    })
+
+    return () => {
+      subscription.subscription.unsubscribe()
+    }
+  }, [isAuthenticated])
+
+  useEffect(() => {
+    let cancelled = false
+    const query = menuSearchQuery.trim()
+    if (!query) {
+      setSearchSuggestions([])
+      return
+    }
+
+    const timer = window.setTimeout(async () => {
+      const supabase = supabaseBrowser()
+      const normalizedQuery = query.replace(/[%_]/g, '')
+      const makeRows = (items: Array<{ value: string; kind: 'employer' | 'internship' }>) => {
+        const dedup = new Map<string, SearchSuggestion>()
+        for (const item of items) {
+          const trimmed = item.value.trim()
+          if (!trimmed) continue
+          const key = `${item.kind}:${trimmed.toLowerCase()}`
+          if (!dedup.has(key)) {
+            dedup.set(key, { value: trimmed, label: trimmed, kind: item.kind })
+          }
+        }
+        return Array.from(dedup.values()).slice(0, 8)
+      }
+
+      const [{ data: internshipRows }, { data: employerRows }] = await Promise.all([
+        supabase
+          .from('internships')
+          .select('title')
+          .eq('is_active', true)
+          .ilike('title', `%${normalizedQuery}%`)
+          .limit(5),
+        supabase
+          .from('internships')
+          .select('company_name')
+          .eq('is_active', true)
+          .ilike('company_name', `%${normalizedQuery}%`)
+          .limit(5),
+      ])
+
+      if (cancelled) return
+      setSearchSuggestions(
+        makeRows([
+          ...(internshipRows ?? []).map((row) => ({ value: row.title ?? '', kind: 'internship' as const })),
+          ...(employerRows ?? []).map((row) => ({ value: row.company_name ?? '', kind: 'employer' as const })),
+        ])
+      )
+    }, 150)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [menuSearchQuery])
+
+  useEffect(() => {
+    if (!showFinishProfilePrompt) {
+      setOnboardingPromptDismissed(false)
+      return
+    }
+    const storageKey = `finish-profile-dismissed:${email ?? 'unknown'}`
+    const dismissed = typeof window !== 'undefined' ? sessionStorage.getItem(storageKey) === '1' : false
+    setOnboardingPromptDismissed(dismissed)
+  }, [email, showFinishProfilePrompt])
+
+  function submitMenuSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setSearchSuggestionsOpen(false)
+    const normalizedQuery = menuSearchQuery.trim()
+    const params = new URLSearchParams()
+
+    if (normalizedQuery) params.set('q', normalizedQuery)
+
+    const next = params.toString()
+    router.push(next ? `/?${next}#internships` : '/#internships')
   }
 
-  async function signOutToContinue() {
-    setSigningOut(true)
-    const supabase = supabaseBrowser()
-    const { error: signOutError } = await supabase.auth.signOut()
-    setSigningOut(false)
-    if (signOutError) {
-      showToast({
-        kind: 'error',
-        message: signOutError.message || 'Could not sign out. Please try again.',
-        key: `sign-out-error:${signOutError.message ?? 'unknown'}`,
-      })
-      return
+  function dismissOnboardingPrompt() {
+    const storageKey = `finish-profile-dismissed:${email ?? 'unknown'}`
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem(storageKey, '1')
     }
-    setShowEmployerModal(false)
-    window.location.href = '/signup/employer?intent=employer'
+    setOnboardingPromptDismissed(true)
   }
 
   async function resendVerification(nextPath: string) {
@@ -153,62 +263,160 @@ export default function SiteHeader({ isAuthenticated, role, email, isEmailVerifi
     })
   }, [email, pathname, showToast, showVerificationBanner])
 
+  useEffect(() => {
+    setMobileMenuOpen(false)
+  }, [pathname])
+
   return (
     <>
       <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-2.5">
-          <div className="flex items-center gap-5">
-            <Link href="/" className="inline-flex items-center leading-none">
-              <Image
-                src="/brand-logo-header.png"
-                alt="Internactive"
-                width={360}
-                height={128}
-                className="relative top-[2px] block h-14 w-auto"
-                priority
-              />
-            </Link>
-            <Link href="/" className={textLinkClasses(homeActive)}>
-              Home
-            </Link>
-            {!isAuthenticated ? (
-              <Link href="/signup/employer" className={textLinkClasses(employersActive)}>
-                For Employers
+        <div className="mx-auto max-w-6xl px-6 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-4">
+              <Link href="/" className="inline-flex items-center leading-none">
+                <Image
+                  src="/brand-logo-header.png"
+                  alt="Internactive"
+                  width={360}
+                  height={128}
+                  className="relative top-[2px] block h-14 w-auto"
+                  priority
+                />
               </Link>
-            ) : isAdmin ? (
-              <Link href="/admin" className={textLinkClasses(adminActive)}>
-                Admin Dashboard
+              <Link href="/" className={`hidden md:inline ${textLinkClasses(homeActive)}`}>
+                Home
               </Link>
-            ) : role === 'student' ? (
-              <button type="button" onClick={() => handleEmployerTarget('/dashboard/employer')} className={textLinkClasses(false)}>
-                For Employers
-              </button>
-            ) : null}
-          </div>
+              {!isAuthenticated ? (
+                <Link href="/signup/employer" className={`hidden md:inline ${textLinkClasses(employersActive)}`}>
+                  For Employers
+                </Link>
+              ) : isAdmin ? (
+                <Link href="/admin" className={`hidden md:inline ${textLinkClasses(adminActive)}`}>
+                  Admin Dashboard
+                </Link>
+              ) : role === 'student' ? (
+                <Link href="/for-employers" className={`hidden md:inline ${textLinkClasses(employersActive)}`}>
+                  For Employers
+                </Link>
+              ) : null}
+            </div>
 
-          <nav className="flex items-center gap-2">
-            {isAuthenticated && role === 'employer' ? (
-              <Link href="/dashboard/employer" className={navClasses(dashboardActive)}>
-                <LayoutDashboard className="h-4 w-4" />
-                Dashboard
-              </Link>
-            ) : null}
+            <nav className="hidden items-center gap-2 md:flex">
+              <form onSubmit={submitMenuSearch} className="relative hidden items-center gap-2 lg:flex">
+                <div className="relative">
+                  <input
+                    value={menuSearchQuery}
+                    onChange={(event) => {
+                      setMenuSearchQuery(event.target.value)
+                      setSearchSuggestionsOpen(true)
+                    }}
+                    onFocus={() => setSearchSuggestionsOpen(true)}
+                    onBlur={() => setTimeout(() => setSearchSuggestionsOpen(false), 120)}
+                    placeholder="Search"
+                    aria-label="Search"
+                    className="h-9 w-72 rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  />
+                  {searchSuggestionsOpen && menuSearchQuery.trim().length > 0 ? (
+                    <div className="absolute left-0 z-30 mt-1 max-h-64 w-full overflow-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+                      {searchSuggestions.length > 0 ? (
+                        searchSuggestions.map((item, index) => (
+                          <button
+                            key={`${item.kind}:${item.value}:${index}`}
+                            type="button"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => {
+                              setMenuSearchQuery(item.value)
+                              setSearchSuggestionsOpen(false)
+                            }}
+                            className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                          >
+                            <span className="font-medium">{item.label}</span>
+                            <span className="ml-2 text-xs text-slate-500">
+                              {item.kind === 'employer' ? 'Employer' : 'Internship'}
+                            </span>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-3 py-2 text-sm text-slate-500">No results found.</div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+              </form>
 
-            {!isAuthenticated ? (
-              <Link href="/login" className={primaryButtonClasses(loginActive)}>
-                <LogIn className="h-4 w-4" />
-                Log in
-              </Link>
-            ) : null}
+              {isAuthenticated && role === 'employer' ? (
+                <Link href="/dashboard/employer" className={navClasses(dashboardActive)}>
+                  <LayoutDashboard className="h-4 w-4" />
+                  Dashboard
+                </Link>
+              ) : null}
 
-            {isAuthenticated && role === 'employer' ? (
-              <Link href="/upgrade" className={navClasses(upgradeActive)}>
-                <ShieldCheck className="h-4 w-4 text-amber-500" />
-                Upgrade
-              </Link>
-            ) : null}
+              {!isAuthenticated ? (
+                <Link href="/login" className={primaryButtonClasses(loginActive)}>
+                  <LogIn className="h-4 w-4" />
+                  Log in
+                </Link>
+              ) : null}
 
-            <div className="flex items-center gap-2">
+              {isAuthenticated && role === 'employer' ? (
+                <Link href="/upgrade" className={navClasses(upgradeActive)}>
+                  <ShieldCheck className="h-4 w-4 text-amber-500" />
+                  Upgrade
+                </Link>
+              ) : null}
+
+              <div className="flex items-center gap-2">
+                {isAuthenticated && role === 'student' ? (
+                  <Link href="/applications" className={iconNavClasses(applicationsActive)} aria-label="Applications" title="Applications">
+                    <FileText className="h-5 w-5" />
+                  </Link>
+                ) : null}
+                <Link href={inboxHref} className={iconNavClasses(inboxActive)} aria-label="Inbox" title="Inbox">
+                  <Mail className="h-5 w-5" />
+                </Link>
+                <Link
+                  href="/notifications"
+                  className={iconNavClasses(notificationsActive)}
+                  aria-label="Notifications"
+                  title="Notifications"
+                >
+                  <Bell className="h-5 w-5" />
+                </Link>
+              </div>
+
+              {isAuthenticated ? (
+                <div className="relative">
+                  <Link
+                    href="/profile"
+                    className={iconNavClasses(profilePageActive || profileActive)}
+                    aria-label="Profile"
+                    title="Profile"
+                  >
+                    {headerAvatarUrl ? (
+                      <img
+                        src={headerAvatarUrl}
+                        alt="Profile"
+                        className="h-7 w-7 rounded-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <User className="h-5 w-5" />
+                    )}
+                  </Link>
+                  {showFinishProfilePrompt && !onboardingPromptDismissed ? (
+                    <span className="absolute right-0 top-0 block h-2.5 w-2.5 rounded-full border border-amber-200 bg-amber-400" />
+                  ) : null}
+                </div>
+              ) : null}
+
+              {isAuthenticated && isAdmin ? (
+                <span className="hidden items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 md:inline-flex">
+                  Admin
+                </span>
+              ) : null}
+            </nav>
+
+            <div className="flex items-center gap-2 md:hidden">
               {isAuthenticated && role === 'student' ? (
                 <Link href="/applications" className={iconNavClasses(applicationsActive)} aria-label="Applications" title="Applications">
                   <FileText className="h-5 w-5" />
@@ -225,51 +433,92 @@ export default function SiteHeader({ isAuthenticated, role, email, isEmailVerifi
               >
                 <Bell className="h-5 w-5" />
               </Link>
-            </div>
-
-            {isAuthenticated ? (
-              <Link href="/profile" className={iconNavClasses(profilePageActive || profileActive)} aria-label="Profile" title="Profile">
-                <User className="h-5 w-5" />
-              </Link>
-            ) : null}
-
-            {isAuthenticated && isAdmin ? (
-              <span className="hidden items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 md:inline-flex">
-                Admin
-              </span>
-            ) : null}
-
-          </nav>
-        </div>
-      </header>
-
-      {showEmployerModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
-            <h2 className="text-lg font-semibold text-slate-900">You&rsquo;re signed in as a student</h2>
-            <p className="mt-2 text-sm text-slate-600">
-              Employer tools require an employer account. Sign out first, then continue.
-            </p>
-            <div className="mt-5 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={signOutToContinue}
-                disabled={signingOut}
-                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+                onClick={() => setMobileMenuOpen((prev) => !prev)}
+                className={iconNavClasses(mobileMenuOpen)}
+                aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
               >
-                {signingOut ? 'Signing out...' : 'Sign out to continue'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowEmployerModal(false)}
-                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Cancel
+                {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
               </button>
             </div>
           </div>
+
+          {mobileMenuOpen ? (
+            <div className="mt-2 space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3 md:hidden">
+              <form onSubmit={submitMenuSearch} className="relative">
+                <input
+                  value={menuSearchQuery}
+                  onChange={(event) => setMenuSearchQuery(event.target.value)}
+                  placeholder="Search employers or internships"
+                  aria-label="Search"
+                  className="h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                />
+              </form>
+              <div className="grid grid-cols-2 gap-2">
+                <Link href="/" className={navClasses(homeActive)}>
+                  Home
+                </Link>
+                {!isAuthenticated ? (
+                  <Link href="/login" className={primaryButtonClasses(loginActive)}>
+                    <LogIn className="h-4 w-4" />
+                    Log in
+                  </Link>
+                ) : (
+                  <Link href="/profile" className={navClasses(profilePageActive || profileActive)}>
+                    Profile
+                  </Link>
+                )}
+                {isAuthenticated && role === 'employer' ? (
+                  <>
+                    <Link href="/dashboard/employer" className={navClasses(dashboardActive)}>
+                      <LayoutDashboard className="h-4 w-4" />
+                      Dashboard
+                    </Link>
+                    <Link href="/upgrade" className={navClasses(upgradeActive)}>
+                      <ShieldCheck className="h-4 w-4 text-amber-500" />
+                      Upgrade
+                    </Link>
+                  </>
+                ) : null}
+                {!isAuthenticated ? (
+                  <Link href="/signup/employer" className={navClasses(employersActive)}>
+                    For Employers
+                  </Link>
+                ) : isAdmin ? (
+                  <Link href="/admin" className={navClasses(adminActive)}>
+                    Admin Dashboard
+                  </Link>
+                ) : role === 'student' ? (
+                  <Link href="/for-employers" className={navClasses(employersActive)}>
+                    For Employers
+                  </Link>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {showFinishProfilePrompt && !onboardingPromptDismissed && finishProfileHref ? (
+            <div className="mt-2 flex items-center gap-2">
+              <Link
+                href={finishProfileHref}
+                className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+              >
+                Finish your profile
+              </Link>
+              <button
+                type="button"
+                aria-label="Dismiss finish profile prompt"
+                onClick={dismissOnboardingPrompt}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-300 bg-white text-xs text-slate-600 hover:bg-slate-50"
+              >
+                ×
+              </button>
+            </div>
+          ) : null}
         </div>
-      )}
+      </header>
+
     </>
   )
 }

@@ -15,7 +15,7 @@ export default async function AdminDashboardPage() {
 
         <div className="rounded-xl border border-slate-200 bg-white p-4">
           <div className="mb-2 text-sm font-medium text-slate-800">Quick actions</div>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             <Link
               href="/admin/internships"
               className="inline-flex h-10 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
@@ -39,6 +39,18 @@ export default async function AdminDashboardPage() {
               className="inline-flex h-10 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
             >
               Manage student profiles
+            </Link>
+            <Link
+              href="/admin/matching/preview"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Student view preview
+            </Link>
+            <Link
+              href="/admin/matching/report"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Matching report
             </Link>
           </div>
         </div>

@@ -8,6 +8,7 @@ import MajorCombobox, { type CanonicalMajor } from '@/components/account/MajorCo
 import UniversityCombobox from '@/components/account/UniversityCombobox'
 import { useToast } from '@/components/feedback/ToastProvider'
 import { normalizeCatalogLabel, normalizeCatalogToken } from '@/lib/catalog/normalization'
+import { getUniversityCourseCatalog, hasUniversitySpecificCourses } from '@/lib/coursework/universityCourseCatalog'
 import { normalizeCourseworkClient } from '@/lib/coursework/normalizeCourseworkClient'
 import {
   addRecoverySuccessParam,
@@ -289,6 +290,15 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
   const [isProfileLoaded, setIsProfileLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { showToast } = useToast()
+  const selectedUniversityName = selectedUniversity?.name ?? universityQuery
+  const universityCourseworkCatalog = useMemo(
+    () => getUniversityCourseCatalog(selectedUniversityName),
+    [selectedUniversityName]
+  )
+  const hasScopedUniversityCatalog = useMemo(
+    () => hasUniversitySpecificCourses(selectedUniversityName),
+    [selectedUniversityName]
+  )
 
   const hasSavedProfile = useMemo(() => {
     return Boolean(
@@ -728,10 +738,10 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
   }, [selectedUniversity, universityQuery])
 
   const addCourseworkOptions = useMemo(() => {
-    return [...new Set([...canonicalCourseworkOptions, ...suggestedCoursework])].filter(
+    return [...new Set([...universityCourseworkCatalog, ...canonicalCourseworkOptions, ...suggestedCoursework])].filter(
       (course) => !includesCoursework(coursework, course)
     )
-  }, [canonicalCourseworkOptions, coursework, suggestedCoursework])
+  }, [canonicalCourseworkOptions, coursework, suggestedCoursework, universityCourseworkCatalog])
 
   const filteredCourseworkOptions = useMemo(() => {
     const query = normalizeCatalogToken(courseworkInput)
@@ -2059,7 +2069,11 @@ function addCourseworkItem(value: string) {
                   </div>
                 )}
               </div>
-              <p className="mt-1 text-xs text-slate-500">Type to pick canonical coursework, or press Enter to add custom coursework.</p>
+              <p className="mt-1 text-xs text-slate-500">
+                {hasScopedUniversityCatalog
+                  ? 'Type to pick coursework tuned to your selected university, or press Enter to add custom coursework.'
+                  : 'Type to pick canonical coursework, or press Enter to add custom coursework.'}
+              </p>
 
               <div className="mt-3 flex flex-wrap gap-2">
                 {coursework.length > 0 ? (

@@ -280,7 +280,14 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
   const internships = (internshipsData ?? []) as InternshipAdminRow[]
 
   const employerIds = Array.from(new Set(internships.map((row) => row.employer_id)))
-  const [{ data: profilesData }, { data: subscriptionsData }, { data: applicationsData }, { data: requiredSkillItems }, { data: preferredSkillItems }] = await Promise.all([
+  const [
+    { data: profilesData },
+    { data: subscriptionsData },
+    { data: applicationsData },
+    { data: requiredSkillItems },
+    { data: preferredSkillItems },
+    { data: courseworkCategoryLinks },
+  ] = await Promise.all([
     employerIds.length > 0
       ? admin.from('employer_profiles').select('user_id, company_name').in('user_id', employerIds)
       : Promise.resolve({ data: [] as EmployerOption[] }),
@@ -299,6 +306,12 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
     internships.length > 0
       ? admin
           .from('internship_preferred_skill_items')
+          .select('internship_id')
+          .in('internship_id', internships.map((row) => row.id))
+      : Promise.resolve({ data: [] as Array<{ internship_id: string }> }),
+    internships.length > 0
+      ? admin
+          .from('internship_coursework_category_links')
           .select('internship_id')
           .in('internship_id', internships.map((row) => row.id))
       : Promise.resolve({ data: [] as Array<{ internship_id: string }> }),
@@ -335,6 +348,14 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
     preferredSkillLinksByInternshipId.set(
       row.internship_id,
       (preferredSkillLinksByInternshipId.get(row.internship_id) ?? 0) + 1
+    )
+  }
+
+  const courseworkCategoryLinksByInternshipId = new Map<string, number>()
+  for (const row of (courseworkCategoryLinks ?? []) as Array<{ internship_id: string }>) {
+    courseworkCategoryLinksByInternshipId.set(
+      row.internship_id,
+      (courseworkCategoryLinksByInternshipId.get(row.internship_id) ?? 0) + 1
     )
   }
 
@@ -931,6 +952,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
                     const requiredSkillsCount = row.required_skills?.length ?? 0
                     const preferredSkillsCount = row.preferred_skills?.length ?? 0
                     const courseworkCount = row.recommended_coursework?.length ?? 0
+                    const courseworkCategoryLinkCount = courseworkCategoryLinksByInternshipId.get(row.id) ?? 0
                     const majorsPresent = Array.isArray(row.majors)
                       ? row.majors.length > 0
                       : typeof row.majors === 'string'
@@ -946,6 +968,8 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
                       Boolean(row.remote_allowed) || Boolean(row.location_city?.trim() || row.location_state?.trim())
                     const coverageChecks = [
                       ['majors', majorsPresent] as const,
+                      ['coursework categories', courseworkCategoryLinkCount > 0] as const,
+                      ['skills', requiredSkillsCount + preferredSkillsCount > 0] as const,
                       ['target_graduation_years', targetGraduationYearsPresent] as const,
                       ['experience_level', experiencePresent] as const,
                       ['term', termPresent] as const,
@@ -985,12 +1009,12 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
                             <span
                               title={coverageTooltip}
                               className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-                                coverageMet === 6
+                                coverageMet === coverageChecks.length
                                   ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
                                   : 'border-amber-300 bg-amber-50 text-amber-700'
                               }`}
                             >
-                              Coverage: {coverageMet}/6
+                              Coverage: {coverageMet}/{coverageChecks.length}
                             </span>
                           </div>
                         </td>
@@ -1009,6 +1033,12 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
                               className="rounded-md border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
                             >
                               Edit
+                            </Link>
+                            <Link
+                              href={`/admin/matching/preview?internship=${encodeURIComponent(row.id)}`}
+                              className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                            >
+                              Preview as student
                             </Link>
                             <form action={toggleActive}>
                               <input type="hidden" name="internship_id" value={row.id} />

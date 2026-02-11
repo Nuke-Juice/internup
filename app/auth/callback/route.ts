@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { buildVerifyRequiredHref } from '@/lib/auth/emailVerification'
 import { hasSupabaseAdminCredentials, supabaseAdmin } from '@/lib/supabase/admin'
 import { resolvePostAuthRedirect } from '@/lib/auth/postAuthRedirect'
 import { supabaseServer } from '@/lib/supabase/server'
@@ -8,6 +9,21 @@ function normalizeNext(value: string | null) {
   if (!next.startsWith('/')) return '/'
   if (next.startsWith('//')) return '/'
   return next
+}
+
+function isOtpType(value: string | null): value is 'signup' | 'email' | 'recovery' | 'invite' | 'email_change' | 'magiclink' {
+  return (
+    value === 'signup' ||
+    value === 'email' ||
+    value === 'recovery' ||
+    value === 'invite' ||
+    value === 'email_change' ||
+    value === 'magiclink'
+  )
+}
+
+function isSignupDetailsPath(path: string) {
+  return path === '/signup/student/details' || path === '/signup/employer/details'
 }
 
 function readRoleHint(nextUrl: string, userMetadata: Record<string, unknown> | null): 'student' | 'employer' | null {
@@ -22,6 +38,8 @@ function readRoleHint(nextUrl: string, userMetadata: Record<string, unknown> | n
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const code = url.searchParams.get('code')
+  const tokenHash = url.searchParams.get('token_hash')
+  const otpType = url.searchParams.get('type')
   const nextUrl = normalizeNext(url.searchParams.get('next'))
 
   const supabase = await supabaseServer()
@@ -30,6 +48,17 @@ export async function GET(request: Request) {
     const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
     if (exchangeError) {
       return NextResponse.redirect(new URL('/login?error=Could+not+finish+OAuth+sign-in', url.origin))
+    }
+  } else if (tokenHash && isOtpType(otpType)) {
+    const { error: verifyError } = await supabase.auth.verifyOtp({
+      type: otpType,
+      token_hash: tokenHash,
+    })
+    if (verifyError) {
+      const fallback = isSignupDetailsPath(nextUrl)
+        ? buildVerifyRequiredHref(nextUrl, 'signup_profile_completion')
+        : `/login?error=${encodeURIComponent('Could not verify email link')}`
+      return NextResponse.redirect(new URL(fallback, url.origin))
     }
   }
 
@@ -73,7 +102,11 @@ export async function GET(request: Request) {
   }
 
   if (!user) {
-    return NextResponse.redirect(new URL('/login', url.origin))
+    if (isSignupDetailsPath(nextUrl)) {
+      return NextResponse.redirect(new URL(buildVerifyRequiredHref(nextUrl, 'signup_profile_completion'), url.origin))
+    }
+    const loginPath = nextUrl !== '/' ? `/login?next=${encodeURIComponent(nextUrl)}` : '/login'
+    return NextResponse.redirect(new URL(loginPath, url.origin))
   }
 
   const { destination } = await resolvePostAuthRedirect({

@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
+import AdminAccount from '@/components/account/AdminAccount'
 import ConfirmSignOutButton from '@/components/auth/ConfirmSignOutButton'
 import { isAdminRole, isUserRole } from '@/lib/auth/roles'
 import { supabaseServer } from '@/lib/supabase/server'
@@ -38,19 +39,38 @@ export default async function ProfilePage() {
     redirect('/account')
   }
 
+  const metadata = (user.user_metadata ?? {}) as {
+    first_name?: string
+    last_name?: string
+    full_name?: string
+    avatar_url?: string
+  }
+  const fullNameTokens =
+    typeof metadata.full_name === 'string'
+      ? metadata.full_name
+          .split(/\s+/)
+          .map((token) => token.trim())
+          .filter(Boolean)
+      : []
+  const firstName = typeof metadata.first_name === 'string' ? metadata.first_name : fullNameTokens[0] ?? ''
+  const lastName =
+    typeof metadata.last_name === 'string' ? metadata.last_name : fullNameTokens.slice(1).join(' ')
+  const avatarUrl = typeof metadata.avatar_url === 'string' ? metadata.avatar_url : ''
+
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-5xl space-y-6">
+        <AdminAccount
+          userId={user.id}
+          userEmail={user.email ?? null}
+          initialFirstName={firstName}
+          initialLastName={lastName}
+          initialAvatarUrl={avatarUrl}
+        />
+
         <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h1 className="text-2xl font-semibold text-slate-900">Admin profile</h1>
-              <p className="mt-1 text-sm text-slate-600">Manage your account and admin access.</p>
-            </div>
-            <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
-              Admin
-            </span>
-          </div>
+          <h2 className="text-base font-semibold text-slate-900">Admin shortcuts</h2>
+          <p className="mt-1 text-sm text-slate-600">Quick access to core admin areas.</p>
 
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
             <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -81,6 +101,12 @@ export default async function ProfilePage() {
               className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
             >
               Go to employers
+            </Link>
+            <Link
+              href="/account/security"
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Security settings
             </Link>
             <ConfirmSignOutButton
               className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"

@@ -49,11 +49,59 @@ export type MatchWeights = {
   locationModePreference: number
 }
 
+export const MATCH_SIGNAL_KEYS = [
+  'skillsRequired',
+  'skillsPreferred',
+  'courseworkAlignment',
+  'majorCategoryAlignment',
+  'graduationYearAlignment',
+  'experienceAlignment',
+  'availability',
+  'locationModePreference',
+] as const
+
+export type MatchSignalKey = (typeof MATCH_SIGNAL_KEYS)[number]
+
+export const MATCH_SIGNAL_DEFINITIONS: Record<MatchSignalKey, { label: string; description: string }> = {
+  skillsRequired: {
+    label: 'Required skills',
+    description: 'Core required skills overlap (canonical IDs first, then text fallback).',
+  },
+  skillsPreferred: {
+    label: 'Preferred skills',
+    description: 'Optional preferred skills overlap (canonical IDs first, then text fallback).',
+  },
+  courseworkAlignment: {
+    label: 'Coursework alignment',
+    description: 'Coursework category/item overlap (category IDs first, then item IDs, then text fallback).',
+  },
+  majorCategoryAlignment: {
+    label: 'Major/category alignment',
+    description: 'Student major alignment with internship majors or category text.',
+  },
+  graduationYearAlignment: {
+    label: 'Graduation year fit',
+    description: 'Target graduation year compatibility (hard filter when target years are set).',
+  },
+  experienceAlignment: {
+    label: 'Experience alignment',
+    description: 'Experience level compatibility (hard filter when required level is set).',
+  },
+  availability: {
+    label: 'Availability fit',
+    description: 'Hours per week closeness to student availability.',
+  },
+  locationModePreference: {
+    label: 'Location/mode fit',
+    description: 'Work mode preference match (includes remote-only and location hard filters).',
+  },
+}
+
 export const DEFAULT_MATCHING_WEIGHTS: MatchWeights = {
   skillsRequired: 4,
   skillsPreferred: 2,
   courseworkAlignment: 1.5,
-  majorCategoryAlignment: 3,
+  majorCategoryAlignment: 3.5,
   graduationYearAlignment: 1.5,
   experienceAlignment: 1.5,
   availability: 2,
@@ -62,12 +110,42 @@ export const DEFAULT_MATCHING_WEIGHTS: MatchWeights = {
 
 export const MATCHING_VERSION = 'v1.1'
 
+export type MatchReason = {
+  reasonKey: string
+  humanText: string
+  evidence: string[]
+}
+
+export type MatchSignalContribution = {
+  signalKey: MatchSignalKey
+  weight: number
+  rawMatchValue: number
+  pointsAwarded: number
+  evidence: string[]
+}
+
+export type InternshipMatchBreakdown = {
+  totalScore: number
+  maxScore: number
+  normalizedScore: number
+  perSignalContributions: MatchSignalContribution[]
+  reasons: MatchReason[]
+}
+
 export type InternshipMatchResult = {
   internshipId: string
   score: number
   reasons: string[]
   gaps: string[]
   eligible: boolean
+  matchingVersion: string
+  maxScore: number
+  normalizedScore: number
+  breakdown?: InternshipMatchBreakdown
+}
+
+export type EvaluateMatchOptions = {
+  explain?: boolean
 }
 
 function normalizeText(value: string) {
@@ -223,13 +301,130 @@ function parseStudentExperienceLevel(value: string | null | undefined) {
   return null
 }
 
+export function getMatchMaxScore(weights: MatchWeights = DEFAULT_MATCHING_WEIGHTS) {
+  return MATCH_SIGNAL_KEYS.reduce((sum, signalKey) => sum + Math.max(0, weights[signalKey]), 0)
+}
+
+function emptySignalContributions(weights: MatchWeights): Record<MatchSignalKey, MatchSignalContribution> {
+  return {
+    skillsRequired: {
+      signalKey: 'skillsRequired',
+      weight: weights.skillsRequired,
+      rawMatchValue: 0,
+      pointsAwarded: 0,
+      evidence: [],
+    },
+    skillsPreferred: {
+      signalKey: 'skillsPreferred',
+      weight: weights.skillsPreferred,
+      rawMatchValue: 0,
+      pointsAwarded: 0,
+      evidence: [],
+    },
+    courseworkAlignment: {
+      signalKey: 'courseworkAlignment',
+      weight: weights.courseworkAlignment,
+      rawMatchValue: 0,
+      pointsAwarded: 0,
+      evidence: [],
+    },
+    majorCategoryAlignment: {
+      signalKey: 'majorCategoryAlignment',
+      weight: weights.majorCategoryAlignment,
+      rawMatchValue: 0,
+      pointsAwarded: 0,
+      evidence: [],
+    },
+    graduationYearAlignment: {
+      signalKey: 'graduationYearAlignment',
+      weight: weights.graduationYearAlignment,
+      rawMatchValue: 0,
+      pointsAwarded: 0,
+      evidence: [],
+    },
+    experienceAlignment: {
+      signalKey: 'experienceAlignment',
+      weight: weights.experienceAlignment,
+      rawMatchValue: 0,
+      pointsAwarded: 0,
+      evidence: [],
+    },
+    availability: {
+      signalKey: 'availability',
+      weight: weights.availability,
+      rawMatchValue: 0,
+      pointsAwarded: 0,
+      evidence: [],
+    },
+    locationModePreference: {
+      signalKey: 'locationModePreference',
+      weight: weights.locationModePreference,
+      rawMatchValue: 0,
+      pointsAwarded: 0,
+      evidence: [],
+    },
+  }
+}
+
+function finalizeMatchResult(params: {
+  internshipId: string
+  reasonsWithPoints: Array<{ text: string; points: number; reasonKey: string; evidence: string[] }>
+  gaps: string[]
+  eligible: boolean
+  explain: boolean
+  signalContributions: Record<MatchSignalKey, MatchSignalContribution>
+  weights: MatchWeights
+}) {
+  const totalScore = MATCH_SIGNAL_KEYS.reduce((sum, signalKey) => sum + params.signalContributions[signalKey].pointsAwarded, 0)
+  const maxScore = getMatchMaxScore(params.weights)
+  const normalizedScore = maxScore > 0 ? totalScore / maxScore : 0
+
+  const sortedReasons = [...params.reasonsWithPoints].sort((a, b) => b.points - a.points)
+
+  const result: InternshipMatchResult = {
+    internshipId: params.internshipId,
+    score: Number(totalScore.toFixed(3)),
+    reasons: sortedReasons.map((reason) => reason.text),
+    gaps: params.gaps.map(mapGap),
+    eligible: params.eligible,
+    matchingVersion: MATCHING_VERSION,
+    maxScore: Number(maxScore.toFixed(3)),
+    normalizedScore: Number(normalizedScore.toFixed(4)),
+  }
+
+  if (params.explain) {
+    const breakdownReasons: MatchReason[] = sortedReasons.map((reason) => ({
+      reasonKey: reason.reasonKey,
+      humanText: reason.text,
+      evidence: reason.evidence,
+    }))
+
+    result.breakdown = {
+      totalScore: Number(totalScore.toFixed(3)),
+      maxScore: Number(maxScore.toFixed(3)),
+      normalizedScore: Number(normalizedScore.toFixed(4)),
+      perSignalContributions: MATCH_SIGNAL_KEYS.map((signalKey) => ({
+        ...params.signalContributions[signalKey],
+        pointsAwarded: Number(params.signalContributions[signalKey].pointsAwarded.toFixed(3)),
+        rawMatchValue: Number(params.signalContributions[signalKey].rawMatchValue.toFixed(4)),
+      })),
+      reasons: breakdownReasons,
+    }
+  }
+
+  return result
+}
+
 export function evaluateInternshipMatch(
   internship: InternshipMatchInput,
   profile: StudentMatchProfile,
-  weights: MatchWeights = DEFAULT_MATCHING_WEIGHTS
+  weights: MatchWeights = DEFAULT_MATCHING_WEIGHTS,
+  options: EvaluateMatchOptions = {}
 ): InternshipMatchResult {
-  const reasons: Array<{ text: string; points: number }> = []
+  const explain = options.explain === true
+  const reasonsWithPoints: Array<{ text: string; points: number; reasonKey: string; evidence: string[] }> = []
   const gaps: string[] = []
+  const signalContributions = emptySignalContributions(weights)
 
   const workMode = deriveWorkMode(internship)
   const term = deriveTerm(internship)
@@ -242,36 +437,45 @@ export function evaluateInternshipMatch(
   const internshipIsInPerson = workMode === 'on-site' || workMode === 'hybrid'
 
   if (profile.remote_only && internshipIsInPerson) {
-    return {
+    gaps.push('Requires in-person work but your profile is remote-only.')
+    return finalizeMatchResult({
       internshipId: internship.id,
-      score: 0,
-      reasons: [],
-      gaps: ['Requires in-person work but your profile is remote-only.'],
+      reasonsWithPoints,
+      gaps,
       eligible: false,
-    }
+      explain,
+      signalContributions,
+      weights,
+    })
   }
 
   if (preferredModes.length > 0 && workMode && !preferredModes.includes(workMode)) {
-    return {
+    gaps.push(`Work mode mismatch (${workMode}).`)
+    return finalizeMatchResult({
       internshipId: internship.id,
-      score: 0,
-      reasons: [],
-      gaps: [`Work mode mismatch (${workMode}).`],
+      reasonsWithPoints,
+      gaps,
       eligible: false,
-    }
+      explain,
+      signalContributions,
+      weights,
+    })
   }
 
   if (preferredTerms.length > 0 && term) {
     const internshipSeason = seasonFromTerm(term)
     const hasTermOverlap = preferredTerms.includes(internshipSeason)
     if (!hasTermOverlap) {
-      return {
+      gaps.push(`Term mismatch (${term}).`)
+      return finalizeMatchResult({
         internshipId: internship.id,
-        score: 0,
-        reasons: [],
-        gaps: [`Term mismatch (${term}).`],
+        reasonsWithPoints,
+        gaps,
         eligible: false,
-      }
+        explain,
+        signalContributions,
+        weights,
+      })
     }
   }
 
@@ -280,15 +484,16 @@ export function evaluateInternshipMatch(
     typeof profile.availability_hours_per_week === 'number' &&
     internship.hours_per_week > profile.availability_hours_per_week
   ) {
-    return {
+    gaps.push(`Hours exceed availability (${internship.hours_per_week} > ${profile.availability_hours_per_week} hrs/week).`)
+    return finalizeMatchResult({
       internshipId: internship.id,
-      score: 0,
-      reasons: [],
-      gaps: [
-        `Hours exceed availability (${internship.hours_per_week} > ${profile.availability_hours_per_week} hrs/week).`,
-      ],
+      reasonsWithPoints,
+      gaps,
       eligible: false,
-    }
+      explain,
+      signalContributions,
+      weights,
+    })
   }
 
   if (internshipIsInPerson && preferredLocations.length > 0 && locationName) {
@@ -297,13 +502,16 @@ export function evaluateInternshipMatch(
     )
 
     if (!matchesPreferredLocation) {
-      return {
+      gaps.push(`In-person location mismatch (${locationName}).`)
+      return finalizeMatchResult({
         internshipId: internship.id,
-        score: 0,
-        reasons: [],
-        gaps: [`In-person location mismatch (${locationName}).`],
+        reasonsWithPoints,
+        gaps,
         eligible: false,
-      }
+        explain,
+        signalContributions,
+        weights,
+      })
     }
   }
 
@@ -332,10 +540,20 @@ export function evaluateInternshipMatch(
     const requiredHits = overlapCount(requiredIds, studentSkillIds)
     const requiredRatio = ratio(requiredHits, requiredIds.length)
     const points = weights.skillsRequired * requiredRatio
+    signalContributions.skillsRequired = {
+      signalKey: 'skillsRequired',
+      weight: weights.skillsRequired,
+      rawMatchValue: requiredRatio,
+      pointsAwarded: points,
+      evidence: [`${requiredHits}/${requiredIds.length} canonical required skill IDs matched`],
+    }
+
     if (requiredHits > 0) {
-      reasons.push({
+      reasonsWithPoints.push({
+        reasonKey: 'skills.required.canonical_overlap',
         text: describeReason('Required skills', points, `${requiredHits}/${requiredIds.length} matched`),
         points,
+        evidence: [`matched=${requiredHits}`, `required=${requiredIds.length}`],
       })
     }
 
@@ -347,13 +565,21 @@ export function evaluateInternshipMatch(
     const requiredHits = overlapCount(required, studentSkills)
     const requiredRatio = ratio(requiredHits, required.length)
     const points = weights.skillsRequired * requiredRatio
+    signalContributions.skillsRequired = {
+      signalKey: 'skillsRequired',
+      weight: weights.skillsRequired,
+      rawMatchValue: requiredRatio,
+      pointsAwarded: points,
+      evidence: [`${requiredHits}/${required.length} required skill tokens matched`],
+    }
+
     if (requiredHits > 0) {
-      reasons.push(
-        {
-          text: describeReason('Required skills', points, `${requiredHits}/${required.length} matched`),
-          points,
-        }
-      )
+      reasonsWithPoints.push({
+        reasonKey: 'skills.required.text_overlap',
+        text: describeReason('Required skills', points, `${requiredHits}/${required.length} matched`),
+        points,
+        evidence: [`matched=${requiredHits}`, `required=${required.length}`],
+      })
     }
 
     const missingRequired = required.filter((skill) => !studentSkills.includes(skill))
@@ -366,23 +592,41 @@ export function evaluateInternshipMatch(
     const preferredHits = overlapCount(preferredIds, studentSkillIds)
     const preferredRatio = ratio(preferredHits, preferredIds.length)
     const points = weights.skillsPreferred * preferredRatio
+    signalContributions.skillsPreferred = {
+      signalKey: 'skillsPreferred',
+      weight: weights.skillsPreferred,
+      rawMatchValue: preferredRatio,
+      pointsAwarded: points,
+      evidence: [`${preferredHits}/${preferredIds.length} canonical preferred skill IDs matched`],
+    }
+
     if (preferredHits > 0) {
-      reasons.push({
+      reasonsWithPoints.push({
+        reasonKey: 'skills.preferred.canonical_overlap',
         text: describeReason('Preferred skills', points, `${preferredHits}/${preferredIds.length} matched`),
         points,
+        evidence: [`matched=${preferredHits}`, `preferred=${preferredIds.length}`],
       })
     }
   } else if (preferred.length > 0) {
     const preferredHits = overlapCount(preferred, studentSkills)
     const preferredRatio = ratio(preferredHits, preferred.length)
     const points = weights.skillsPreferred * preferredRatio
+    signalContributions.skillsPreferred = {
+      signalKey: 'skillsPreferred',
+      weight: weights.skillsPreferred,
+      rawMatchValue: preferredRatio,
+      pointsAwarded: points,
+      evidence: [`${preferredHits}/${preferred.length} preferred skill tokens matched`],
+    }
+
     if (preferredHits > 0) {
-      reasons.push(
-        {
-          text: describeReason('Preferred skills', points, `${preferredHits}/${preferred.length} matched`),
-          points,
-        }
-      )
+      reasonsWithPoints.push({
+        reasonKey: 'skills.preferred.text_overlap',
+        text: describeReason('Preferred skills', points, `${preferredHits}/${preferred.length} matched`),
+        points,
+        evidence: [`matched=${preferredHits}`, `preferred=${preferred.length}`],
+      })
     }
   }
 
@@ -393,14 +637,24 @@ export function evaluateInternshipMatch(
     const categoryHits = overlapCount(recommendedCourseworkCategoryIds, studentCourseworkCategoryIds)
     const categoryRatio = ratio(categoryHits, recommendedCourseworkCategoryIds.length)
     const points = weights.courseworkAlignment * categoryRatio
+    signalContributions.courseworkAlignment = {
+      signalKey: 'courseworkAlignment',
+      weight: weights.courseworkAlignment,
+      rawMatchValue: categoryRatio,
+      pointsAwarded: points,
+      evidence: [`${categoryHits}/${recommendedCourseworkCategoryIds.length} coursework categories matched`],
+    }
+
     if (categoryHits > 0) {
       const categoryDetail =
         recommendedCourseworkCategoryNames.length > 0
           ? recommendedCourseworkCategoryNames.slice(0, categoryHits).join(', ')
           : `${categoryHits}/${recommendedCourseworkCategoryIds.length} category matches`
-      reasons.push({
+      reasonsWithPoints.push({
+        reasonKey: 'coursework.categories.canonical_overlap',
         text: describeReason('Coursework categories', points, categoryDetail),
         points,
+        evidence: recommendedCourseworkCategoryNames.slice(0, categoryHits),
       })
     }
   } else {
@@ -409,10 +663,20 @@ export function evaluateInternshipMatch(
       const courseworkHits = overlapCount(recommendedCourseworkIds, studentCourseworkIds)
       const courseworkRatio = ratio(courseworkHits, recommendedCourseworkIds.length)
       const points = weights.courseworkAlignment * courseworkRatio
+      signalContributions.courseworkAlignment = {
+        signalKey: 'courseworkAlignment',
+        weight: weights.courseworkAlignment,
+        rawMatchValue: courseworkRatio,
+        pointsAwarded: points,
+        evidence: [`${courseworkHits}/${recommendedCourseworkIds.length} coursework items matched`],
+      }
+
       if (courseworkHits > 0) {
-        reasons.push({
+        reasonsWithPoints.push({
+          reasonKey: 'coursework.items.canonical_overlap',
           text: describeReason('Recommended coursework', points, `${courseworkHits}/${recommendedCourseworkIds.length} matched`),
           points,
+          evidence: [`matched=${courseworkHits}`, `recommended=${recommendedCourseworkIds.length}`],
         })
       }
     } else {
@@ -422,10 +686,20 @@ export function evaluateInternshipMatch(
         const courseworkHits = overlapCount(recommendedCoursework, studentCoursework)
         const courseworkRatio = ratio(courseworkHits, recommendedCoursework.length)
         const points = weights.courseworkAlignment * courseworkRatio
+        signalContributions.courseworkAlignment = {
+          signalKey: 'courseworkAlignment',
+          weight: weights.courseworkAlignment,
+          rawMatchValue: courseworkRatio,
+          pointsAwarded: points,
+          evidence: [`${courseworkHits}/${recommendedCoursework.length} coursework text tokens matched`],
+        }
+
         if (courseworkHits > 0) {
-          reasons.push({
+          reasonsWithPoints.push({
+            reasonKey: 'coursework.text_overlap',
             text: describeReason('Recommended coursework', points, `${courseworkHits}/${recommendedCoursework.length} matched`),
             points,
+            evidence: [`matched=${courseworkHits}`, `recommended=${recommendedCoursework.length}`],
           })
         }
       }
@@ -434,38 +708,66 @@ export function evaluateInternshipMatch(
 
   if (targetGradYears.length > 0 && studentYear) {
     const yearMatch = targetGradYears.includes(studentYear)
-    if (!yearMatch) {
-      return {
-        internshipId: internship.id,
-        score: 0,
-        reasons: [],
-        gaps: [`Graduation year mismatch (${profile.year ?? 'unknown'}).`],
-        eligible: false,
-      }
+    signalContributions.graduationYearAlignment = {
+      signalKey: 'graduationYearAlignment',
+      weight: weights.graduationYearAlignment,
+      rawMatchValue: yearMatch ? 1 : 0,
+      pointsAwarded: yearMatch ? weights.graduationYearAlignment : 0,
+      evidence: [`student_year=${profile.year ?? studentYear}`, `target_years=${targetGradYears.join('|')}`],
     }
 
-    reasons.push({
+    if (!yearMatch) {
+      gaps.push(`Graduation year mismatch (${profile.year ?? 'unknown'}).`)
+      return finalizeMatchResult({
+        internshipId: internship.id,
+        reasonsWithPoints,
+        gaps,
+        eligible: false,
+        explain,
+        signalContributions,
+        weights,
+      })
+    }
+
+    reasonsWithPoints.push({
+      reasonKey: 'graduation_year.fit',
       text: describeReason('Graduation year fit', weights.graduationYearAlignment, profile.year ?? studentYear),
       points: weights.graduationYearAlignment,
+      evidence: [`student_year=${profile.year ?? studentYear}`],
     })
   }
 
   if (internshipExperienceLevel !== null && studentExperienceLevel !== null) {
-    if (studentExperienceLevel < internshipExperienceLevel) {
-      return {
-        internshipId: internship.id,
-        score: 0,
-        reasons: [],
-        gaps: [
-          `Experience mismatch (requires ${internship.experience_level}, profile is ${profile.experience_level ?? 'unknown'}).`,
-        ],
-        eligible: false,
-      }
+    const passes = studentExperienceLevel >= internshipExperienceLevel
+    signalContributions.experienceAlignment = {
+      signalKey: 'experienceAlignment',
+      weight: weights.experienceAlignment,
+      rawMatchValue: passes ? 1 : 0,
+      pointsAwarded: passes ? weights.experienceAlignment : 0,
+      evidence: [
+        `student_level=${profile.experience_level ?? 'unknown'}`,
+        `required_level=${internship.experience_level ?? 'unknown'}`,
+      ],
     }
 
-    reasons.push({
+    if (!passes) {
+      gaps.push(`Experience mismatch (requires ${internship.experience_level}, profile is ${profile.experience_level ?? 'unknown'}).`)
+      return finalizeMatchResult({
+        internshipId: internship.id,
+        reasonsWithPoints,
+        gaps,
+        eligible: false,
+        explain,
+        signalContributions,
+        weights,
+      })
+    }
+
+    reasonsWithPoints.push({
+      reasonKey: 'experience.fit',
       text: describeReason('Experience alignment', weights.experienceAlignment, profile.experience_level ?? 'aligned'),
       points: weights.experienceAlignment,
+      evidence: [`student_level=${profile.experience_level ?? 'unknown'}`],
     })
   }
 
@@ -474,15 +776,24 @@ export function evaluateInternshipMatch(
     const categoryHit = internshipCategory && studentMajors.some((major) => internshipCategory.includes(major))
     const alignmentRatio = majorHits > 0 ? ratio(majorHits, Math.max(1, internshipMajors.length)) : categoryHit ? 0.5 : 0
     const points = weights.majorCategoryAlignment * alignmentRatio
+    signalContributions.majorCategoryAlignment = {
+      signalKey: 'majorCategoryAlignment',
+      weight: weights.majorCategoryAlignment,
+      rawMatchValue: alignmentRatio,
+      pointsAwarded: points,
+      evidence: majorHits > 0 ? [`major_hits=${majorHits}/${Math.max(1, internshipMajors.length)}`] : categoryHit ? [`category_hit=${internshipCategory}`] : [],
+    }
 
     if (points > 0) {
-      reasons.push({
+      reasonsWithPoints.push({
+        reasonKey: majorHits > 0 ? 'major.overlap' : 'major.category_fallback',
         text: describeReason(
           'Major/category alignment',
           points,
           majorHits > 0 ? `${majorHits} major overlap` : `category match (${internshipCategory})`
         ),
         points,
+        evidence: majorHits > 0 ? [`major_hits=${majorHits}`] : [`category=${internshipCategory}`],
       })
     } else {
       gaps.push('No major/category alignment')
@@ -496,11 +807,20 @@ export function evaluateInternshipMatch(
     const diff = Math.abs(internship.hours_per_week - profile.availability_hours_per_week)
     const closeness = Math.max(0, 1 - diff / Math.max(1, profile.availability_hours_per_week))
     const points = weights.availability * closeness
+    signalContributions.availability = {
+      signalKey: 'availability',
+      weight: weights.availability,
+      rawMatchValue: closeness,
+      pointsAwarded: points,
+      evidence: [`hours_diff=${diff}`, `student_hours=${profile.availability_hours_per_week}`],
+    }
 
     if (points > 0) {
-      reasons.push({
+      reasonsWithPoints.push({
+        reasonKey: 'availability.fit',
         text: describeReason('Availability fit', points, `${internship.hours_per_week} hrs/week`),
         points,
+        evidence: [`internship_hours=${internship.hours_per_week}`],
       })
     }
   }
@@ -508,39 +828,45 @@ export function evaluateInternshipMatch(
   if (workMode) {
     const modePreferenceHit = preferredModes.length === 0 || preferredModes.includes(workMode)
     const points = modePreferenceHit ? weights.locationModePreference : 0
+    signalContributions.locationModePreference = {
+      signalKey: 'locationModePreference',
+      weight: weights.locationModePreference,
+      rawMatchValue: modePreferenceHit ? 1 : 0,
+      pointsAwarded: points,
+      evidence: [`work_mode=${workMode}`],
+    }
 
     if (points > 0) {
-      reasons.push({
+      reasonsWithPoints.push({
+        reasonKey: 'location_mode.fit',
         text: describeReason('Work mode fit', points, workMode),
         points,
+        evidence: [`work_mode=${workMode}`],
       })
     }
   }
 
-  const totalScore = reasons.reduce((sum, reason) => sum + reason.points, 0)
-
-  const topReasons = reasons
-    .sort((a, b) => b.points - a.points)
-    .map((reason) => reason.text)
-
-  return {
+  return finalizeMatchResult({
     internshipId: internship.id,
-    score: Number(totalScore.toFixed(3)),
-    reasons: topReasons,
-    gaps: gaps.map(mapGap),
+    reasonsWithPoints,
+    gaps,
     eligible: true,
-  }
+    explain,
+    signalContributions,
+    weights,
+  })
 }
 
 export function rankInternships(
   internships: InternshipMatchInput[],
   profile: StudentMatchProfile,
-  weights: MatchWeights = DEFAULT_MATCHING_WEIGHTS
+  weights: MatchWeights = DEFAULT_MATCHING_WEIGHTS,
+  options: EvaluateMatchOptions = {}
 ) {
   return internships
     .map((internship) => ({
       internship,
-      match: evaluateInternshipMatch(internship, profile, weights),
+      match: evaluateInternshipMatch(internship, profile, weights, options),
     }))
     .filter((item) => item.match.eligible)
     .sort((left, right) => {

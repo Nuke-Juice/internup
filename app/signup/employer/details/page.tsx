@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { supabaseBrowser } from '@/lib/supabase/client'
+import { toUserFacingErrorMessage } from '@/lib/errors/userFacingError'
 
 const FIELD =
   'mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100'
@@ -20,6 +21,8 @@ type EmployerProfileRow = {
 export default function EmployerSignupDetailsPage() {
   const [initializing, setInitializing] = useState(true)
 
+  const [firstName, setFirstName] = useState('')
+  const [lastName, setLastName] = useState('')
   const [companyName, setCompanyName] = useState('')
   const [website, setWebsite] = useState('')
   const [contactEmail, setContactEmail] = useState('')
@@ -48,6 +51,23 @@ export default function EmployerSignupDetailsPage() {
           '/verify-required?next=%2Fsignup%2Femployer%2Fdetails&action=signup_profile_completion'
         return
       }
+
+      const metadata = (user.user_metadata ?? {}) as {
+        first_name?: string
+        last_name?: string
+        full_name?: string
+      }
+      const fullNameTokens =
+        typeof metadata.full_name === 'string'
+          ? metadata.full_name
+              .split(/\s+/)
+              .map((part) => part.trim())
+              .filter(Boolean)
+          : []
+      setFirstName(typeof metadata.first_name === 'string' ? metadata.first_name : fullNameTokens[0] ?? '')
+      setLastName(
+        typeof metadata.last_name === 'string' ? metadata.last_name : fullNameTokens.slice(1).join(' ')
+      )
 
       const { data: userRow } = await supabase.from('users').select('role, verified').eq('id', user.id).maybeSingle()
       if (userRow?.verified !== true) {
@@ -98,6 +118,8 @@ export default function EmployerSignupDetailsPage() {
   async function saveProfileDetails() {
     setError(null)
 
+    if (!firstName.trim()) return setError('First name is required.')
+    if (!lastName.trim()) return setError('Last name is required.')
     if (!companyName.trim()) return setError('Company name is required.')
     if (!address.trim()) return setError('Address is required.')
 
@@ -134,7 +156,8 @@ export default function EmployerSignupDetailsPage() {
       return
     }
 
-    const [{ error: userError }, { error: profileError }] = await Promise.all([
+    const fullName = `${firstName.trim()} ${lastName.trim()}`.trim()
+    const [{ error: userError }, { error: profileError }, { error: authError }] = await Promise.all([
       supabase.from('users').upsert(
         {
           id: user.id,
@@ -154,12 +177,20 @@ export default function EmployerSignupDetailsPage() {
         },
         { onConflict: 'user_id' }
       ),
+      supabase.auth.updateUser({
+        data: {
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          full_name: fullName || null,
+        },
+      }),
     ])
 
     setSaving(false)
 
-    if (userError) return setError(userError.message)
-    if (profileError) return setError(profileError.message)
+    if (userError) return setError(toUserFacingErrorMessage(userError.message))
+    if (profileError) return setError(toUserFacingErrorMessage(profileError.message))
+    if (authError) return setError(toUserFacingErrorMessage(authError.message))
 
     window.location.href = '/dashboard/employer'
   }
@@ -190,6 +221,26 @@ export default function EmployerSignupDetailsPage() {
 
         <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="mt-4 grid gap-5 sm:grid-cols-2">
+            <div>
+              <label className="text-sm font-medium text-slate-700">First name</label>
+              <input
+                className={FIELD}
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                placeholder="Jane"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-slate-700">Last name</label>
+              <input
+                className={FIELD}
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                placeholder="Doe"
+              />
+            </div>
+
             <div className="sm:col-span-2">
               <label className="text-sm font-medium text-slate-700">Company name</label>
               <input

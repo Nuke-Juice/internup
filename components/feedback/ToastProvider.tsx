@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { usePathname } from 'next/navigation'
+import { toUserFacingErrorMessage } from '@/lib/errors/userFacingError'
 
 export type ToastKind = 'success' | 'warning' | 'error'
 
@@ -67,7 +68,9 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const showToast = useCallback((input: ToastInput) => {
-    const key = input.key ?? `${input.kind}:${input.message}`
+    const normalizedMessage =
+      input.kind === 'error' ? toUserFacingErrorMessage(input.message) : input.message
+    const key = input.key ?? `${input.kind}:${normalizedMessage}`
     const now = Date.now()
     if (recentKeys[key] && now - recentKeys[key] < 1200) return
 
@@ -76,6 +79,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     const durationMs = input.durationMs ?? DEFAULT_DURATION
     const record: ToastRecord = {
       ...input,
+      message: normalizedMessage,
       id: makeId(),
       expiresAt: now + durationMs,
     }
