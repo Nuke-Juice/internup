@@ -24,6 +24,7 @@ export default function VerifyRequiredPanel({ email, nextUrl, actionName, resend
   const [state, formAction, pending] = useActionState(resendAction, INITIAL_STATE)
   const [cooldownSeconds, setCooldownSeconds] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
+  const [signingOut, setSigningOut] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
   const [checking, setChecking] = useState(false)
   const { showToast } = useToast()
@@ -145,6 +146,26 @@ export default function VerifyRequiredPanel({ email, nextUrl, actionName, resend
     router.refresh()
   }
 
+  async function signOutNow() {
+    setSigningOut(true)
+    const supabase = supabaseBrowser()
+    const { error } = await supabase.auth.signOut()
+    setSigningOut(false)
+
+    if (error) {
+      setRefreshError(error.message)
+      showToast({
+        kind: 'error',
+        message: error.message,
+        key: `verify-signout-error:${error.message}`,
+      })
+      return
+    }
+
+    router.replace('/login')
+    router.refresh()
+  }
+
   useEffect(() => {
     const interval = setInterval(() => {
       void checkVerificationStatus()
@@ -192,6 +213,14 @@ export default function VerifyRequiredPanel({ email, nextUrl, actionName, resend
           className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
         >
           {refreshing ? 'Refreshing...' : 'I verified, refresh'}
+        </button>
+        <button
+          type="button"
+          onClick={() => void signOutNow()}
+          disabled={signingOut}
+          className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+        >
+          {signingOut ? 'Signing out...' : 'Sign out'}
         </button>
       </form>
       <p className="mt-3 text-xs text-slate-500" aria-live="polite">
