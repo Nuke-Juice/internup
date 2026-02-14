@@ -1,6 +1,6 @@
 import Link from 'next/link'
-import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
+import { revalidatePath, unstable_noStore as noStore } from 'next/cache'
 import { ArrowLeft } from 'lucide-react'
 import { requireRole } from '@/lib/auth/requireRole'
 import { startStarterEmployerCheckoutAction } from '@/lib/billing/actions'
@@ -21,17 +21,27 @@ import {
 import {
   deriveTermFromRange,
 } from '@/lib/internships/term'
+import {
+  type EmployerInternshipRow,
+  getEmployerInternshipCounts,
+  getEmployerInternships,
+  isEmployerInternshipActive,
+  summarizeEmployerInternshipCounts,
+} from '@/lib/internships/employerCounts'
+import { normalizeEmployerVerificationTier, normalizeLocationType } from '@/lib/internships/locationType'
 import { isVerifiedCityForState, normalizeStateCode } from '@/lib/locations/usLocationCatalog'
 import { supabaseServer } from '@/lib/supabase/server'
 import { guardEmployerInternshipPublish } from '@/lib/auth/verifiedActionGate'
 import { sanitizeSkillLabels } from '@/lib/skills/sanitizeSkillLabels'
-import { verifyTurnstileToken } from '@/lib/security/turnstile'
 import BackWithFallbackButton from '@/components/navigation/BackWithFallbackButton'
 import { INTERNSHIP_CATEGORIES } from '@/lib/internships/categories'
 import { TARGET_STUDENT_YEAR_LABELS, TARGET_STUDENT_YEAR_OPTIONS } from '@/lib/internships/years'
 import { inferExternalApplyType, normalizeApplyMode, normalizeExternalApplyUrl } from '@/lib/apply/externalApply'
 import { trackAnalyticsEvent } from '@/lib/analytics'
+import ListingDraftCleanup from '@/components/employer/listing/ListingDraftCleanup'
 import ListingWizard from '@/components/employer/listing/ListingWizard'
+import CreateInternshipCta from '@/app/dashboard/employer/_components/CreateInternshipCta'
+import ActiveInternshipsList, { type ActiveInternshipListItem } from '@/app/dashboard/employer/_components/ActiveInternshipsList'
 
 function isLaunchConciergeEnabled() {
   const raw = (process.env.LAUNCH_CONCIERGE_ENABLED ?? '').trim().toLowerCase()
@@ -52,6 +62,11 @@ function parseList(value: string) {
     .flatMap((item) => item.split(','))
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function sanitizeErrorDetails(value: string | undefined) {
+  if (!value) return null
+  return value.replace(/\s+/g, ' ').trim().slice(0, 500)
 }
 
 function parseTargetStudentYears(value: FormDataEntryValue | null) {
@@ -86,106 +101,132 @@ function parseJsonStringArray(value: FormDataEntryValue | null): string[] {
   }
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function filterUuidList(values: string[]) {
+  return values.filter((value) => UUID_PATTERN.test(value.trim()))
+}
+
 function formatMajors(value: unknown) {
   if (Array.isArray(value)) return value.join(', ')
   return value ? String(value) : ''
 }
 
-function getCreateInternshipError(searchParams?: { code?: string; error?: string; limit?: string; current?: string }) {
+function formatListingState(row: { is_active: boolean | null; status: string | null }) {
+  const status = (row.status ?? '').trim().toLowerCase()
+  if (row.is_active) return status ? `Active • ${status}` : 'Active'
+  return status ? `Inactive • ${status}` : 'Inactive'
+}
+
+function parseErrorFields(rawFields: string | undefined) {
+  if (!rawFields) return []
+  return rawFields
+    .split(',')
+    .map((field) => field.trim())
+    .filter(Boolean)
+}
+
+function getCreateInternshipError(searchParams?: {
+  code?: string
+  error?: string
+  limit?: string
+  current?: string
+  fields?: string
+}) {
   const code = searchParams?.code as InternshipValidationErrorCode | ListingPublishErrorCode | string | undefined
+  const incomingFields = parseErrorFields(searchParams?.fields)
+  const withField = <T extends string | null>(message: string, field: T) => ({
+    message,
+    field,
+    fields: field ? [field] : incomingFields,
+  })
 
   if (code === INTERNSHIP_VALIDATION_ERROR.WORK_MODE_REQUIRED) {
-    return { message: 'Work mode is required.', field: 'work_mode' as const }
+    return withField('Work mode is required.', 'work_mode' as const)
   }
   if (code === INTERNSHIP_VALIDATION_ERROR.TERM_REQUIRED) {
-    return { message: 'Start month/year and end month/year are required.', field: 'term' as const }
+    return withField('Start month/year and end month/year are required.', 'term' as const)
   }
   if (code === INTERNSHIP_VALIDATION_ERROR.INVALID_HOURS_RANGE) {
-    return { message: 'Hours range is invalid. Use values between 1 and 80 with min <= max.', field: 'hours' as const }
+    return withField('Hours range is invalid. Use values between 1 and 80 with min <= max.', 'hours' as const)
   }
   if (code === INTERNSHIP_VALIDATION_ERROR.LOCATION_REQUIRED) {
-    return { message: 'City and state are required for hybrid/on-site roles.', field: 'location' as const }
+    return withField('City and state are required for hybrid/on-site roles.', 'location' as const)
   }
   if (code === INTERNSHIP_VALIDATION_ERROR.REQUIRED_SKILLS_MISSING) {
-    return { message: 'Add at least one required skill.', field: 'required_skills' as const }
+    return withField('Add at least one required skill.', 'required_skills' as const)
   }
   if (code === INTERNSHIP_VALIDATION_ERROR.REQUIRED_COURSE_CATEGORIES_MISSING) {
-    return { message: 'Add at least one required coursework category.', field: 'required_course_categories' as const }
+    return withField('Add at least one required coursework category.', 'required_course_categories' as const)
   }
   if (code === INTERNSHIP_VALIDATION_ERROR.TARGET_STUDENT_YEAR_REQUIRED) {
-    return { message: 'Select the target year in school.', field: 'target_student_year' as const }
+    return withField('Select the target year in school.', 'target_student_year' as const)
   }
   if (code === INTERNSHIP_VALIDATION_ERROR.COURSEWORK_STRENGTH_REQUIRED) {
-    return { message: 'Select desired coursework strength.', field: 'desired_coursework_strength' as const }
+    return withField('Select desired coursework strength.', 'desired_coursework_strength' as const)
   }
   if (code === INTERNSHIP_VALIDATION_ERROR.INVALID_PAY_RANGE) {
-    return { message: 'Pay range is invalid. Use min >= 0 and max >= min.', field: 'pay' as const }
+    return withField('Pay range is invalid. Use min >= 0 and max >= min.', 'pay' as const)
   }
   if (code === INTERNSHIP_VALIDATION_ERROR.REMOTE_ELIGIBILITY_REQUIRED) {
-    return { message: 'Remote eligibility state is required for remote/hybrid roles.', field: 'remote_eligibility' as const }
+    return withField('Remote eligibility state is required for remote/hybrid roles.', 'remote_eligibility' as const)
   }
   if (code === INTERNSHIP_VALIDATION_ERROR.DEADLINE_INVALID) {
-    return { message: 'Application deadline must be today or later.', field: 'application_deadline' as const }
+    return withField('Application deadline must be today or later.', 'application_deadline' as const)
+  }
+  if (code === 'LOCATION_TYPE_INVALID') {
+    return withField('Please choose a valid work location: Remote, In-person, or Hybrid.', 'work_mode' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.TITLE_REQUIRED) {
-    return { message: 'Title is required for publish.', field: 'title' as const }
+    return withField('Title is required for publish.', 'title' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.WORK_MODE_REQUIRED) {
-    return { message: 'Work mode is required for publish.', field: 'work_mode' as const }
+    return withField('Work mode is required for publish.', 'work_mode' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.LOCATION_REQUIRED) {
-    return { message: 'City and state are required for hybrid/on-site roles.', field: 'location' as const }
+    return withField('City and state are required for hybrid/on-site roles.', 'location' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.PAY_REQUIRED) {
-    return { message: 'Pay details are required for publish.', field: 'pay' as const }
+    return withField('Pay details are required for publish.', 'pay' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.HOURS_REQUIRED) {
-    return { message: 'Hours range is required for publish.', field: 'hours' as const }
+    return withField('Hours range is required for publish.', 'hours' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.TERM_REQUIRED) {
-    return { message: 'Start and end dates are required for publish.', field: 'term' as const }
+    return withField('Start and end dates are required for publish.', 'term' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.MAJORS_REQUIRED) {
-    return { message: 'At least one major is required for publish.', field: 'majors' as const }
+    return withField('At least one major is required for publish.', 'majors' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.SHORT_SUMMARY_REQUIRED) {
-    return { message: 'Add a short summary for listing cards.', field: 'short_summary' as const }
+    return withField('Add a short summary for listing cards.', 'short_summary' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.DESCRIPTION_REQUIRED) {
-    return { message: 'Description is required for publish.', field: 'description' as const }
+    return withField('Description is required for publish.', 'description' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.SKILLS_REQUIRED) {
-    return { message: 'At least one canonical skill is required for publish.', field: 'required_skills' as const }
+    return withField('At least one canonical skill is required for publish.', 'required_skills' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.COURSE_CATEGORIES_REQUIRED) {
-    return { message: 'At least one required coursework category is required for publish.', field: 'required_course_categories' as const }
+    return withField('At least one required coursework category is required for publish.', 'required_course_categories' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.YEAR_IN_SCHOOL_REQUIRED) {
-    return { message: 'Year in school is required for publish.', field: 'target_student_year' as const }
+    return withField('Year in school is required for publish.', 'target_student_year' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.COURSEWORK_STRENGTH_REQUIRED) {
-    return { message: 'Coursework strength is required for publish.', field: 'desired_coursework_strength' as const }
+    return withField('Coursework strength is required for publish.', 'desired_coursework_strength' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.REMOTE_ELIGIBILITY_REQUIRED) {
-    return { message: 'Remote eligibility state is required for remote/hybrid listings.', field: 'remote_eligibility' as const }
+    return withField('Remote eligibility state is required for remote/hybrid listings.', 'remote_eligibility' as const)
   }
   if (code === LISTING_PUBLISH_ERROR.EXTERNAL_APPLY_URL_REQUIRED) {
-    return { message: 'A valid https ATS application URL is required for ATS-link or hybrid apply mode.', field: null }
+    return withField('A valid https ATS application URL is required for ATS-link or hybrid apply mode.', 'external_apply_url')
   }
   if (code === PLAN_LIMIT_REACHED) {
-    const limit = Number.parseInt(String(searchParams?.limit ?? ''), 10)
-    const current = Number.parseInt(String(searchParams?.current ?? ''), 10)
-    const fallback = 'Plan limit reached. Upgrade to post more active internships.'
-    if (!Number.isFinite(limit) || !Number.isFinite(current)) {
-      return { message: fallback, field: null }
-    }
-    return {
-      message: `Plan limit reached: ${current} active internships, limit ${limit}. Upgrade to increase your capacity.`,
-      field: null,
-    }
+    return withField('Free plan allows 1 active internship. Deactivate an active listing or upgrade.', null)
   }
   if (searchParams?.error) {
-    return { message: decodeURIComponent(searchParams.error), field: null }
+    return withField('We could not publish this internship. Please review the highlighted fields and try again.', null)
   }
   return null
 }
@@ -197,18 +238,25 @@ export default async function EmployerDashboardPage({
   searchParams?: Promise<{
     error?: string
     success?: string
+    published_id?: string
     code?: string
     create?: string
     edit?: string
+    draft?: string
+    draft_cleared?: string
     concierge?: string
     concierge_success?: string
     concierge_error?: string
     limit?: string
     current?: string
+    fields?: string
+    reason?: string
   }>
   createOnly?: boolean
 }) {
+  noStore()
   const { user } = await requireRole('employer', { requestedPath: '/dashboard/employer' })
+  console.info('[employer.dashboard.auth] auth_uid=%s role=%s', user.id, 'employer')
   if (!user.email_confirmed_at) {
     redirect(buildVerifyRequiredHref('/dashboard/employer', 'signup_continue'))
   }
@@ -226,28 +274,80 @@ export default async function EmployerDashboardPage({
     redirect('/signup/employer/details')
   }
 
-  const { data: internships } = createOnly
-    ? {
-        data: [] as Array<{
-          id: string
-          title: string
-          location: string
-          target_student_years: string[] | null
-          target_student_year: string | null
-          majors: unknown
-          created_at: string
-          updated_at: string | null
-          is_active: boolean
-          status: 'draft' | 'published' | 'archived' | string | null
-          work_mode: string
-        }>,
+  console.info(
+    '[employer.dashboard.query_filters] auth_uid=%s employer_id=%s status_filter=%s is_active_filter=%s',
+    user.id,
+    user.id,
+    'none',
+    'none'
+  )
+  if (process.env.NODE_ENV !== 'production') {
+    const [{ count: diagnosticOwnerCount, error: diagnosticOwnerCountError }, { data: diagnosticLatestRows, error: diagnosticLatestRowsError }] =
+      await Promise.all([
+        supabase.from('internships').select('id', { head: true, count: 'exact' }).eq('employer_id', user.id),
+        supabase
+          .from('internships')
+          .select('id, employer_id, title, is_active, status, created_at')
+          .eq('employer_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(5),
+      ])
+    console.info(
+      '[employer.dashboard.diagnostic_owner_count] auth_uid=%s employer_id=%s count=%s error=%s',
+      user.id,
+      user.id,
+      diagnosticOwnerCount ?? 0,
+      diagnosticOwnerCountError?.message ?? 'none'
+    )
+    console.info(
+      '[employer.dashboard.diagnostic_latest_rows] auth_uid=%s employer_id=%s rows=%s error=%s payload=%s',
+      user.id,
+      user.id,
+      diagnosticLatestRows?.length ?? 0,
+      diagnosticLatestRowsError?.message ?? 'none',
+      JSON.stringify(diagnosticLatestRows ?? [])
+    )
+  }
+
+  let internships: EmployerInternshipRow[] = []
+  try {
+    internships = await getEmployerInternships(supabase, user.id)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown'
+    console.warn('[employer.dashboard.internships_fetch_failed] auth_uid=%s employer_id=%s message=%s', user.id, user.id, message)
+  }
+  const publishedIdFromParams = String(resolvedSearchParams?.published_id ?? '').trim()
+  let publishedOwnerMismatchMessage: string | null = null
+  if (publishedIdFromParams && !internships.some((row) => row.id === publishedIdFromParams)) {
+    const { data: justPublishedRow, error: justPublishedError } = await supabase
+      .from('internships')
+      .select('*')
+      .eq('id', publishedIdFromParams)
+      .maybeSingle()
+    if (justPublishedError) {
+      console.warn(
+        '[employer.internships.published_lookup_failed] published_id=%s user_id=%s message=%s',
+        publishedIdFromParams,
+        user.id,
+        justPublishedError.message
+      )
+    } else if (justPublishedRow?.id) {
+      if (justPublishedRow.employer_id === user.id) {
+        internships = [justPublishedRow, ...internships]
+      } else {
+        publishedOwnerMismatchMessage =
+          'Listing was published, but it belongs to a different employer account than the one currently signed in.'
+        console.warn(
+          '[employer.internships.owner_mismatch] published_id=%s current_user=%s row_employer_id=%s',
+          publishedIdFromParams,
+          user.id,
+          String(justPublishedRow.employer_id ?? '')
+        )
       }
-    : await supabase
-        .from('internships')
-        .select('id, title, location, target_student_year, target_student_years, majors, created_at, updated_at, is_active, status, work_mode')
-        .eq('employer_id', user.id)
-        .order('created_at', { ascending: false })
+    }
+  }
   const editingInternshipId = String(resolvedSearchParams?.edit ?? '').trim()
+  const requestedDraftId = String(resolvedSearchParams?.draft ?? '').trim()
   const { data: editingInternship } = editingInternshipId
     ? await supabase
         .from('internships')
@@ -332,7 +432,8 @@ export default async function EmployerDashboardPage({
         .order('created_at', { ascending: false })
         .limit(5)
     : { data: [] as Array<{ id: string; role_title: string | null; status: string | null; created_at: string | null }> }
-  const activeInternshipsCount = (internships ?? []).filter((internship) => internship.status === 'published' || internship.is_active).length
+  const internshipCounts = summarizeEmployerInternshipCounts(internships)
+  const activeInternshipsCount = internshipCounts.activeCount
 
   async function createInternship(formData: FormData) {
     'use server'
@@ -340,9 +441,30 @@ export default async function EmployerDashboardPage({
     const { user: currentUser } = await requireRole('employer', { requestedPath: '/dashboard/employer' })
     const supabaseAction = await supabaseServer()
     const internshipId = String(formData.get('internship_id') ?? '').trim()
+    const draftId = String(formData.get('draft_id') ?? '').trim()
     const createMode = String(formData.get('create_mode') ?? 'publish').trim().toLowerCase()
     const isDraft = createMode === 'draft'
     const isPublishing = !isDraft
+    const createFormBase = internshipId
+      ? `/dashboard/employer/new?edit=${encodeURIComponent(internshipId)}`
+      : draftId
+        ? `/dashboard/employer/new?draft=${encodeURIComponent(draftId)}`
+        : '/dashboard/employer?create=1'
+    const buildCreateErrorRedirect = (input: {
+      code?: string
+      message?: string
+      reason: string
+      fields?: string[]
+    }) => {
+      const params = new URLSearchParams()
+      if (input.code) params.set('code', input.code)
+      if (input.message) params.set('error', input.message)
+      params.set('reason', input.reason)
+      if (input.fields && input.fields.length > 0) {
+        params.set('fields', input.fields.join(','))
+      }
+      return `${createFormBase}${createFormBase.includes('?') ? '&' : '?'}${params.toString()}`
+    }
 
     const verification = await getEmployerVerificationStatus({ supabase: supabaseAction, userId: currentUser.id })
     const existingListing =
@@ -359,24 +481,18 @@ export default async function EmployerDashboardPage({
       redirect('/dashboard/employer?error=Listing+not+found')
     }
 
+    console.info(
+      '[internships.publish_attempt] user_id=%s draft_id=%s internship_id=%s mode=%s',
+      currentUser.id,
+      draftId || null,
+      internshipId || null,
+      createMode
+    )
+
     if (isPublishing) {
       const verificationGate = guardEmployerInternshipPublish(currentUser)
       if (!verificationGate.ok) {
         redirect(verificationGate.redirectTo)
-      }
-      if (!verification.isVerifiedEmployer) {
-        const token = String(formData.get('turnstile_token') ?? '').trim()
-        const requestHeaders = await headers()
-        const forwardedFor = requestHeaders.get('x-forwarded-for')
-        const remoteIp = forwardedFor ? forwardedFor.split(',')[0]?.trim() || null : null
-        const turnstile = await verifyTurnstileToken({
-          token,
-          expectedAction: 'create_internship',
-          remoteIp,
-        })
-        if (!turnstile.ok) {
-          redirect('/dashboard/employer?error=Please+complete+the+human+verification+and+try+again.')
-        }
       }
       if (!verification.isVerifiedEmployer) {
         const cutoff = new Date()
@@ -392,17 +508,24 @@ export default async function EmployerDashboardPage({
         }
       }
 
-      const { count } = await supabaseAction
-        .from('internships')
-        .select('id', { count: 'exact', head: true })
-        .eq('employer_id', currentUser.id)
-        .eq('status', 'published')
-
-      const currentActive = count ?? 0
+      let currentActive = 0
+      try {
+        currentActive = (await getEmployerInternshipCounts(supabaseAction, currentUser.id)).activeCount
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'unknown'
+        redirect(
+          buildCreateErrorRedirect({
+            message: `Unable to verify plan capacity: ${message}`,
+            reason: 'capacity_count_failed',
+          })
+        )
+      }
       const limit = verification.plan.maxActiveInternships
       const shouldCheckLimit = internshipId.length === 0 || (existingListing.data?.status !== 'published' && !existingListing.data?.is_active)
       if (shouldCheckLimit && limit !== null && currentActive >= limit) {
-        redirect(`/dashboard/employer?code=${PLAN_LIMIT_REACHED}&limit=${limit}&current=${currentActive}`)
+        redirect(
+          `/dashboard/employer?code=${PLAN_LIMIT_REACHED}&limit=${limit}&current=${currentActive}&reason=capacity_limit_reached`
+        )
       }
     }
 
@@ -438,10 +561,12 @@ export default async function EmployerDashboardPage({
     const hoursMin = Number(String(formData.get('hours_min') ?? '').trim())
     const hoursMax = Number(String(formData.get('hours_max') ?? '').trim())
     const requiredSkillsRaw = String(formData.get('required_skills') ?? '').trim()
-    const selectedRequiredSkillIds = Array.from(new Set(parseJsonStringArray(formData.get('required_skill_ids'))))
+    const selectedRequiredSkillIds = Array.from(new Set(filterUuidList(parseJsonStringArray(formData.get('required_skill_ids')))))
     const preferredSkillsRaw = String(formData.get('preferred_skills') ?? '').trim()
-    const selectedPreferredSkillIds = Array.from(new Set(parseJsonStringArray(formData.get('preferred_skill_ids'))))
-    const selectedRequiredCourseCategoryIds = Array.from(new Set(parseJsonStringArray(formData.get('required_course_category_ids'))))
+    const selectedPreferredSkillIds = Array.from(new Set(filterUuidList(parseJsonStringArray(formData.get('preferred_skill_ids')))))
+    const selectedRequiredCourseCategoryIds = Array.from(
+      new Set(filterUuidList(parseJsonStringArray(formData.get('required_course_category_ids'))))
+    )
     const requiredSkillIdsRaw = selectedRequiredSkillIds.join(',')
     const requiredCourseCategoryIdsRaw = selectedRequiredCourseCategoryIds.join(',')
     const applicationDeadline = String(formData.get('application_deadline') ?? '').trim()
@@ -454,8 +579,13 @@ export default async function EmployerDashboardPage({
     const resolvedExternalApplyUrl = requiresExternalApply ? externalApplyUrl : null
     const resolvedExternalApplyType = requiresExternalApply ? externalApplyType : null
     if (requiresExternalApply && !externalApplyUrl) {
-      const nextBase = internshipId ? `/dashboard/employer?create=1&edit=${encodeURIComponent(internshipId)}` : '/dashboard/employer?create=1'
-      redirect(`${nextBase}&error=Valid+https+ATS+application+URL+is+required+for+ATS+or+hybrid+apply+mode`)
+      redirect(
+        buildCreateErrorRedirect({
+          message: 'Valid https ATS application URL is required for ATS or hybrid apply mode',
+          reason: 'external_apply_url_required',
+          fields: ['external_apply_url'],
+        })
+      )
     }
     const shortSummary = String(formData.get('short_summary') ?? '').trim()
     const description = String(formData.get('description') ?? '').trim()
@@ -465,6 +595,16 @@ export default async function EmployerDashboardPage({
     const payMax = Number(String(formData.get('pay_max') ?? '').trim())
     const pay = Number.isFinite(payMin) && Number.isFinite(payMax) ? `$${payMin}-$${payMax}/hr` : ''
     const resumeRequired = String(formData.get('resume_required') ?? '1').trim() !== '0'
+
+    if (isPublishing && !applicationDeadline) {
+      redirect(
+        buildCreateErrorRedirect({
+          message: 'Application deadline is required for publish',
+          reason: 'application_deadline_required',
+          fields: ['application_deadline'],
+        })
+      )
+    }
     const targetStudentYears = parseTargetStudentYears(formData.get('target_student_years'))
     const targetStudentYear =
       targetStudentYears.length === TARGET_STUDENT_YEAR_OPTIONS.length
@@ -472,7 +612,7 @@ export default async function EmployerDashboardPage({
         : targetStudentYears[0] ?? String(formData.get('target_student_year') ?? '').trim().toLowerCase()
     const desiredCourseworkStrength = String(formData.get('desired_coursework_strength') ?? '').trim().toLowerCase()
     const majorsRaw = String(formData.get('majors') ?? '').trim()
-    const selectedMajorIds = Array.from(new Set(parseJsonStringArray(formData.get('major_ids'))))
+    const selectedMajorIds = Array.from(new Set(filterUuidList(parseJsonStringArray(formData.get('major_ids')))))
     const selectedMajorNames = selectedMajorIds.map((id) => majorNamesById.get(id)).filter((value): value is string => Boolean(value))
     const resolvedMajors = selectedMajorNames.length > 0 ? selectedMajorNames : parseCommaList(majorsRaw)
     const normalizedRequiredSkills = sanitizeSkillLabels(parseCommaList(requiredSkillsRaw)).valid
@@ -489,11 +629,6 @@ export default async function EmployerDashboardPage({
     }
     const canonicalRequiredSkillIds = Array.from(new Set([...selectedRequiredSkillIds]))
     const canonicalPreferredSkillIds = Array.from(new Set([...selectedPreferredSkillIds]))
-
-    if (isPublishing && (responsibilities.length === 0 || qualifications.length === 0)) {
-      const nextBase = internshipId ? `/dashboard/employer?create=1&edit=${encodeURIComponent(internshipId)}` : '/dashboard/employer?create=1'
-      redirect(`${nextBase}&error=Responsibilities+and+qualifications+are+required+for+publish`)
-    }
 
     if (isPublishing) {
       const publishValidation = validateListingForPublish({
@@ -522,8 +657,14 @@ export default async function EmployerDashboardPage({
         externalApplyUrl: resolvedExternalApplyUrl,
       })
       if (!publishValidation.ok) {
-        const nextBase = internshipId ? `/dashboard/employer?create=1&edit=${encodeURIComponent(internshipId)}` : '/dashboard/employer?create=1'
-        redirect(`${nextBase}&code=${publishValidation.code}`)
+        const mapped = getCreateInternshipError({ code: publishValidation.code })
+        redirect(
+          buildCreateErrorRedirect({
+            code: publishValidation.code,
+            reason: 'listing_publish_validation_failed',
+            fields: mapped?.fields ?? [],
+          })
+        )
       }
     }
 
@@ -549,13 +690,25 @@ export default async function EmployerDashboardPage({
       })
 
       if (!validation.ok) {
-        const nextBase = internshipId ? `/dashboard/employer?create=1&edit=${encodeURIComponent(internshipId)}` : '/dashboard/employer?create=1'
-        redirect(`${nextBase}&code=${validation.code}`)
+        const mapped = getCreateInternshipError({ code: validation.code })
+        redirect(
+          buildCreateErrorRedirect({
+            code: validation.code,
+            reason: 'internship_validation_failed',
+            fields: mapped?.fields ?? [],
+          })
+        )
       }
     }
 
     if (locationCity && locationState && !isVerifiedCityForState(locationCity, locationState)) {
-      redirect('/dashboard/employer?error=Select+a+verified+city+and+state+combination')
+      redirect(
+        buildCreateErrorRedirect({
+          message: 'Select a verified city and state combination',
+          reason: 'city_state_mismatch',
+          fields: ['location_city', 'location_state'],
+        })
+      )
     }
 
     const normalizedLocation =
@@ -564,6 +717,21 @@ export default async function EmployerDashboardPage({
           ? `Remote (${remoteEligibleState})`
           : 'Remote'
         : `${locationCity.trim()}, ${locationState.trim()} (${workMode})`
+    const locationType = normalizeLocationType(workMode)
+    if (!locationType) {
+      console.warn('[internships.create] reason=invalid_location_type raw=%s', workMode)
+      redirect(
+        buildCreateErrorRedirect({
+          code: 'LOCATION_TYPE_INVALID',
+          reason: 'location_type_invalid',
+          fields: ['work_mode'],
+        })
+      )
+    }
+
+    const employerVerificationTier =
+      normalizeEmployerVerificationTier(verification.plan.id) ??
+      (verification.isVerifiedEmployer ? 'pro' : 'free')
 
     const payload = {
       employer_id: currentUser.id,
@@ -591,7 +759,7 @@ export default async function EmployerDashboardPage({
       apply_mode: applyMode,
       external_apply_url: resolvedExternalApplyUrl,
       external_apply_type: resolvedExternalApplyType,
-      location_type: workMode,
+      location_type: locationType,
       term,
       hours_min: hoursMin,
       hours_max: hoursMax,
@@ -601,7 +769,7 @@ export default async function EmployerDashboardPage({
       is_active: isPublishing,
       status: isPublishing ? 'published' : 'draft',
       source: 'employer_self' as const,
-      employer_verification_tier: verification.isVerifiedEmployer ? 'pro' : 'free',
+      employer_verification_tier: employerVerificationTier,
       pay,
       required_skills: resolvedRequiredSkillLabels.size > 0 ? Array.from(resolvedRequiredSkillLabels) : null,
       preferred_skills: resolvedPreferredSkillLabels.size > 0 ? Array.from(resolvedPreferredSkillLabels) : null,
@@ -611,16 +779,53 @@ export default async function EmployerDashboardPage({
       majors: resolvedMajors.length > 0 ? resolvedMajors : null,
     }
 
+    const logPublishFailure = (reason: string, message: string) => {
+      console.error('[internships.create] reason=internship_publish_failed code=%s user_id=%s internship_id=%s draft_id=%s details=%s payload=%s', reason, currentUser.id, internshipId || null, draftId || null, sanitizeErrorDetails(message), JSON.stringify({
+        employer_id: currentUser.id,
+        internship_id: internshipId || null,
+        draft_id: draftId || null,
+        create_mode: createMode,
+        work_mode: workMode,
+        location_type: locationType,
+        apply_mode: applyMode,
+        category: category || null,
+        role_category: category || null,
+        is_active: isPublishing,
+        status: isPublishing ? 'published' : 'draft',
+        pay_min: Number.isFinite(payMin) ? payMin : null,
+        pay_max: Number.isFinite(payMax) ? payMax : null,
+        hours_min: Number.isFinite(hoursMin) ? hoursMin : null,
+        hours_max: Number.isFinite(hoursMax) ? hoursMax : null,
+        description_len: description.length,
+        short_summary_len: shortSummary.length,
+      }))
+    }
+
     const { data: insertedInternship, error } =
       internshipId.length > 0
         ? await supabaseAction.from('internships').update(payload).eq('id', internshipId).eq('employer_id', currentUser.id).select('id').maybeSingle()
         : await supabaseAction.from('internships').insert(payload).select('id').single()
 
     if (error) {
-      redirect(`/dashboard/employer?error=${encodeURIComponent(error.message)}`)
+      logPublishFailure('upsert_failed', error.message)
+      redirect(
+        buildCreateErrorRedirect({
+          message: error.message,
+          reason: 'upsert_failed',
+        })
+      )
     }
 
     const persistedInternshipId = internshipId.length > 0 ? internshipId : insertedInternship?.id
+    if (!persistedInternshipId) {
+      logPublishFailure('missing_persisted_id', 'Persisted internship id missing after write')
+      redirect(
+        buildCreateErrorRedirect({
+          message: 'Publish failed before confirmation. Please retry.',
+          reason: 'missing_persisted_id',
+        })
+      )
+    }
     if (persistedInternshipId) {
       const { error: clearSkillsError } = await supabaseAction
         .from('internship_required_skill_items')
@@ -628,7 +833,13 @@ export default async function EmployerDashboardPage({
         .eq('internship_id', persistedInternshipId)
 
       if (clearSkillsError) {
-        redirect(`/dashboard/employer?error=${encodeURIComponent(clearSkillsError.message)}`)
+        logPublishFailure('clear_required_skills_failed', clearSkillsError.message)
+        redirect(
+          buildCreateErrorRedirect({
+            message: clearSkillsError.message,
+            reason: 'clear_required_skills_failed',
+          })
+        )
       }
 
       if (canonicalRequiredSkillIds.length > 0) {
@@ -639,7 +850,13 @@ export default async function EmployerDashboardPage({
           }))
         )
         if (requiredSkillLinkError) {
-          redirect(`/dashboard/employer?error=${encodeURIComponent(requiredSkillLinkError.message)}`)
+          logPublishFailure('insert_required_skills_failed', requiredSkillLinkError.message)
+          redirect(
+            buildCreateErrorRedirect({
+              message: requiredSkillLinkError.message,
+              reason: 'insert_required_skills_failed',
+            })
+          )
         }
       }
 
@@ -648,7 +865,13 @@ export default async function EmployerDashboardPage({
         .delete()
         .eq('internship_id', persistedInternshipId)
       if (clearPreferredSkillsError) {
-        redirect(`/dashboard/employer?error=${encodeURIComponent(clearPreferredSkillsError.message)}`)
+        logPublishFailure('clear_preferred_skills_failed', clearPreferredSkillsError.message)
+        redirect(
+          buildCreateErrorRedirect({
+            message: clearPreferredSkillsError.message,
+            reason: 'clear_preferred_skills_failed',
+          })
+        )
       }
       if (canonicalPreferredSkillIds.length > 0) {
         const { error: preferredSkillLinkError } = await supabaseAction.from('internship_preferred_skill_items').insert(
@@ -658,7 +881,13 @@ export default async function EmployerDashboardPage({
           }))
         )
         if (preferredSkillLinkError) {
-          redirect(`/dashboard/employer?error=${encodeURIComponent(preferredSkillLinkError.message)}`)
+          logPublishFailure('insert_preferred_skills_failed', preferredSkillLinkError.message)
+          redirect(
+            buildCreateErrorRedirect({
+              message: preferredSkillLinkError.message,
+              reason: 'insert_preferred_skills_failed',
+            })
+          )
         }
       }
 
@@ -667,7 +896,13 @@ export default async function EmployerDashboardPage({
         .delete()
         .eq('internship_id', persistedInternshipId)
       if (clearCourseCategoriesError) {
-        redirect(`/dashboard/employer?error=${encodeURIComponent(clearCourseCategoriesError.message)}`)
+        logPublishFailure('clear_course_categories_failed', clearCourseCategoriesError.message)
+        redirect(
+          buildCreateErrorRedirect({
+            message: clearCourseCategoriesError.message,
+            reason: 'clear_course_categories_failed',
+          })
+        )
       }
       if (selectedRequiredCourseCategoryIds.length > 0) {
         const { error: courseCategoryInsertError } = await supabaseAction
@@ -679,7 +914,13 @@ export default async function EmployerDashboardPage({
             }))
           )
         if (courseCategoryInsertError) {
-          redirect(`/dashboard/employer?error=${encodeURIComponent(courseCategoryInsertError.message)}`)
+          logPublishFailure('insert_course_categories_failed', courseCategoryInsertError.message)
+          redirect(
+            buildCreateErrorRedirect({
+              message: courseCategoryInsertError.message,
+              reason: 'insert_course_categories_failed',
+            })
+          )
         }
       }
 
@@ -688,7 +929,13 @@ export default async function EmployerDashboardPage({
         .delete()
         .eq('internship_id', persistedInternshipId)
       if (clearMajorLinksError) {
-        redirect(`/dashboard/employer?error=${encodeURIComponent(clearMajorLinksError.message)}`)
+        logPublishFailure('clear_major_links_failed', clearMajorLinksError.message)
+        redirect(
+          buildCreateErrorRedirect({
+            message: clearMajorLinksError.message,
+            reason: 'clear_major_links_failed',
+          })
+        )
       }
       if (selectedMajorIds.length > 0) {
         const { error: majorLinkInsertError } = await supabaseAction
@@ -700,21 +947,99 @@ export default async function EmployerDashboardPage({
             }))
           )
         if (majorLinkInsertError) {
-          redirect(`/dashboard/employer?error=${encodeURIComponent(majorLinkInsertError.message)}`)
+          logPublishFailure('insert_major_links_failed', majorLinkInsertError.message)
+          redirect(
+            buildCreateErrorRedirect({
+              message: majorLinkInsertError.message,
+              reason: 'insert_major_links_failed',
+            })
+          )
         }
       }
     }
 
+    const { data: persistedRow, error: persistedRowError } = await supabaseAction
+      .from('internships')
+      .select('id, employer_id, status, is_active')
+      .eq('id', persistedInternshipId)
+      .maybeSingle()
+
+    if (persistedRowError || !persistedRow?.id) {
+      logPublishFailure('post_write_lookup_failed', persistedRowError?.message ?? 'not_found')
+      redirect(
+        buildCreateErrorRedirect({
+          message: 'Publish could not be confirmed. Please retry.',
+          reason: 'post_write_lookup_failed',
+        })
+      )
+    }
+
+    console.info(
+      '[internships.publish_owner_check] auth_uid=%s internship_id=%s persisted_employer_id=%s',
+      currentUser.id,
+      persistedRow.id,
+      String(persistedRow.employer_id ?? '')
+    )
+
+    if (persistedRow.employer_id !== currentUser.id) {
+      logPublishFailure(
+        'owner_mismatch',
+        `auth_uid=${currentUser.id} persisted_employer_id=${String(persistedRow.employer_id ?? '')}`
+      )
+      redirect(
+        buildCreateErrorRedirect({
+          message: 'Publish owner mismatch detected. Please contact support.',
+          reason: 'owner_mismatch',
+        })
+      )
+    }
+
+    if (isPublishing && (persistedRow.status !== 'published' || persistedRow.is_active !== true)) {
+      logPublishFailure(
+        'post_write_state_mismatch',
+        `status=${String(persistedRow.status)} is_active=${String(persistedRow.is_active)}`
+      )
+      redirect(
+        buildCreateErrorRedirect({
+          message: 'Publish did not complete correctly. Please retry.',
+          reason: 'post_write_state_mismatch',
+        })
+      )
+    }
+
+    console.info(
+      '[internships.publish_result] user_id=%s internship_id=%s employer_id=%s status=%s is_active=%s',
+      currentUser.id,
+      persistedRow.id,
+      persistedRow.employer_id,
+      String(persistedRow.status),
+      String(persistedRow.is_active)
+    )
+
     await trackAnalyticsEvent({
       eventName: isPublishing ? 'employer_listing_published' : 'employer_listing_draft_saved',
       userId: currentUser.id,
-      properties: { internship_id: persistedInternshipId ?? internshipId ?? null, mode: createMode },
+      properties: { internship_id: persistedInternshipId, mode: createMode },
     })
 
+    revalidatePath('/dashboard/employer')
+    revalidatePath('/dashboard/employer/new')
+
     if (internshipId.length > 0) {
-      redirect(`/dashboard/employer?success=${isPublishing ? 'Listing+updated' : 'Draft+saved'}`)
+      redirect(
+        `/dashboard/employer?success=${isPublishing ? 'Listing+updated' : 'Draft+saved'}${
+          isPublishing && draftId ? `&draft_cleared=${encodeURIComponent(draftId)}` : ''
+        }${isPublishing ? `&published_id=${encodeURIComponent(persistedInternshipId)}` : ''}`
+      )
     }
-    redirect(`/dashboard/employer?success=${isPublishing ? 'Listing+published' : 'Draft+saved'}`)
+    if (isPublishing) {
+      redirect(
+        `/dashboard/employer?success=Internship+published&published_id=${encodeURIComponent(
+          persistedInternshipId
+        )}&draft_cleared=${encodeURIComponent(draftId || '')}`
+      )
+    }
+    redirect('/dashboard/employer?success=Draft+saved')
   }
 
   async function publishDraft(formData: FormData) {
@@ -730,10 +1055,13 @@ export default async function EmployerDashboardPage({
       redirect(verificationGate.redirectTo)
     }
 
+    const verification = await getEmployerVerificationStatus({ supabase: supabaseAction, userId: currentUser.id })
+    const limit = verification.plan.maxActiveInternships
+
     const { data: draft } = await supabaseAction
       .from('internships')
       .select(
-        'id, title, employer_id, work_mode, location_city, location_state, pay, pay_min, pay_max, hours_min, hours_max, term, majors, short_summary, description, target_student_year, target_student_years, desired_coursework_strength, remote_eligibility_scope, remote_eligible_states, remote_eligible_state, apply_mode, external_apply_url, internship_required_skill_items(skill_id), internship_required_course_categories(category_id)'
+        'id, title, employer_id, work_mode, location_city, location_state, pay, pay_min, pay_max, hours_min, hours_max, term, majors, short_summary, description, target_student_year, target_student_years, desired_coursework_strength, remote_eligibility_scope, remote_eligible_states, remote_eligible_state, apply_mode, external_apply_url, is_active, status, internship_required_skill_items(skill_id), internship_required_course_categories(category_id)'
       )
       .eq('id', internshipId)
       .eq('employer_id', currentUser.id)
@@ -741,6 +1069,19 @@ export default async function EmployerDashboardPage({
 
     if (!draft?.id) {
       redirect('/dashboard/employer?error=Draft+not+found')
+    }
+
+    let currentActive = 0
+    try {
+      currentActive = (await getEmployerInternshipCounts(supabaseAction, currentUser.id)).activeCount
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown'
+      redirect(`/dashboard/employer?error=${encodeURIComponent(`Unable to verify plan capacity: ${message}`)}`)
+    }
+
+    const shouldCheckLimit = draft.status !== 'published' && !draft.is_active
+    if (shouldCheckLimit && limit !== null && currentActive >= limit) {
+      redirect(`/dashboard/employer?code=${PLAN_LIMIT_REACHED}&limit=${limit}&current=${currentActive}&reason=capacity_limit_reached`)
     }
 
     const requiredSkillIds = (draft.internship_required_skill_items ?? [])
@@ -813,13 +1154,105 @@ export default async function EmployerDashboardPage({
       redirect(`/dashboard/employer?error=${encodeURIComponent(error.message)}`)
     }
 
+    const { data: persistedRow, error: persistedRowError } = await supabaseAction
+      .from('internships')
+      .select('id, employer_id, status, is_active')
+      .eq('id', internshipId)
+      .maybeSingle()
+    if (persistedRowError || !persistedRow?.id) {
+      redirect('/dashboard/employer?error=Publish+did+not+complete+correctly')
+    }
+    console.info(
+      '[internships.publish_owner_check] auth_uid=%s internship_id=%s persisted_employer_id=%s',
+      currentUser.id,
+      persistedRow.id,
+      String(persistedRow.employer_id ?? '')
+    )
+    if (persistedRow.employer_id !== currentUser.id) {
+      redirect('/dashboard/employer?error=Publish+owner+mismatch+detected')
+    }
+    if (persistedRow.status !== 'published' || persistedRow.is_active !== true) {
+      redirect('/dashboard/employer?error=Publish+did+not+complete+correctly')
+    }
+
+    console.info(
+      '[internships.publish_result] user_id=%s internship_id=%s employer_id=%s status=%s is_active=%s',
+      currentUser.id,
+      persistedRow.id,
+      persistedRow.employer_id,
+      String(persistedRow.status),
+      String(persistedRow.is_active)
+    )
+
     await trackAnalyticsEvent({
       eventName: 'employer_listing_published',
       userId: currentUser.id,
       properties: { internship_id: internshipId, mode: 'publish_draft' },
     })
 
-    redirect('/dashboard/employer?success=Draft+published')
+    revalidatePath('/dashboard/employer')
+    revalidatePath('/dashboard/employer/new')
+
+    redirect(
+      `/dashboard/employer?success=Internship+published&published_id=${encodeURIComponent(
+        internshipId
+      )}&draft_cleared=${encodeURIComponent(internshipId)}`
+    )
+  }
+
+  async function toggleInternshipActive(formData: FormData) {
+    'use server'
+
+    const { user: currentUser } = await requireRole('employer', { requestedPath: '/dashboard/employer' })
+    const supabaseAction = await supabaseServer()
+    const internshipId = String(formData.get('internship_id') ?? '').trim()
+    const nextActive = String(formData.get('next_active') ?? '').trim() === '1'
+
+    if (!internshipId) {
+      redirect('/dashboard/employer?error=Missing+internship+id')
+    }
+
+    const { data: existingRow } = await supabaseAction
+      .from('internships')
+      .select('id, employer_id, is_active')
+      .eq('id', internshipId)
+      .eq('employer_id', currentUser.id)
+      .maybeSingle()
+
+    if (!existingRow?.id) {
+      redirect('/dashboard/employer?error=Listing+not+found')
+    }
+
+    if (nextActive && !existingRow.is_active) {
+      const verification = await getEmployerVerificationStatus({ supabase: supabaseAction, userId: currentUser.id })
+      let currentActive = 0
+      try {
+        currentActive = (await getEmployerInternshipCounts(supabaseAction, currentUser.id)).activeCount
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'unknown'
+        redirect(`/dashboard/employer?error=${encodeURIComponent(`Unable to verify plan capacity: ${message}`)}`)
+      }
+      const limit = verification.plan.maxActiveInternships
+      if (limit !== null && currentActive >= limit) {
+        redirect(`/dashboard/employer?code=${PLAN_LIMIT_REACHED}&limit=${limit}&current=${currentActive}&reason=capacity_limit_reached`)
+      }
+    }
+
+    const { error } = await supabaseAction
+      .from('internships')
+      .update({
+        is_active: nextActive,
+        status: nextActive ? 'published' : 'draft',
+      })
+      .eq('id', internshipId)
+      .eq('employer_id', currentUser.id)
+
+    if (error) {
+      redirect(`/dashboard/employer?error=${encodeURIComponent(error.message)}`)
+    }
+
+    revalidatePath('/dashboard/employer')
+    redirect(`/dashboard/employer?success=Listing+${nextActive ? 'activated' : 'deactivated'}`)
   }
 
   async function deleteDraft(formData: FormData) {
@@ -841,7 +1274,37 @@ export default async function EmployerDashboardPage({
       redirect(`/dashboard/employer?error=${encodeURIComponent(error.message)}`)
     }
 
-    redirect('/dashboard/employer?success=Draft+deleted')
+    redirect(`/dashboard/employer?success=Draft+deleted&draft_cleared=${encodeURIComponent(internshipId)}`)
+  }
+
+  async function deletePublishedInternship(formData: FormData) {
+    'use server'
+
+    const { user: currentUser } = await requireRole('employer', { requestedPath: '/dashboard/employer' })
+    const supabaseAction = await supabaseServer()
+    const internshipId = String(formData.get('internship_id') ?? '').trim()
+    const confirmationPhrase = String(formData.get('confirmation_phrase') ?? '').trim().toUpperCase()
+    const acknowledged = String(formData.get('acknowledge_delete') ?? '').trim() === '1'
+
+    if (!internshipId) {
+      redirect('/dashboard/employer?error=Missing+internship+id')
+    }
+    if (!acknowledged || confirmationPhrase !== 'DELETE') {
+      redirect('/dashboard/employer?error=Deletion+not+confirmed.+Please+check+the+box+and+type+DELETE')
+    }
+
+    const { error } = await supabaseAction
+      .from('internships')
+      .delete()
+      .eq('id', internshipId)
+      .eq('employer_id', currentUser.id)
+      .eq('status', 'published')
+
+    if (error) {
+      redirect(`/dashboard/employer?error=${encodeURIComponent(error.message)}`)
+    }
+
+    redirect(`/dashboard/employer?success=Listing+deleted&draft_cleared=${encodeURIComponent(internshipId)}`)
   }
 
   async function createConciergeRequest(formData: FormData) {
@@ -883,9 +1346,25 @@ export default async function EmployerDashboardPage({
     redirect('/dashboard/employer?concierge_success=1')
   }
 
-  const createInternshipError = getCreateInternshipError(resolvedSearchParams)
-  const showUpgradeModal = isPlanLimitReachedCode(resolvedSearchParams?.code)
-  const internshipTotal = internships?.length ?? 0
+  const isActuallyAtPlanLimit =
+    plan.maxActiveInternships !== null && activeInternshipsCount >= plan.maxActiveInternships
+  const rawCreateInternshipError = getCreateInternshipError(resolvedSearchParams)
+  const createInternshipError =
+    isPlanLimitReachedCode(resolvedSearchParams?.code) && !isActuallyAtPlanLimit ? null : rawCreateInternshipError
+  const listingWizardServerError = createInternshipError
+    ? {
+        message: createInternshipError.message,
+        code: typeof resolvedSearchParams?.code === 'string' ? resolvedSearchParams.code : null,
+        field: createInternshipError.field ?? null,
+        fields: createInternshipError.fields ?? null,
+        reason: typeof resolvedSearchParams?.reason === 'string' ? resolvedSearchParams.reason : null,
+        details: sanitizeErrorDetails(
+          typeof resolvedSearchParams?.error === 'string' ? decodeURIComponent(resolvedSearchParams.error) : undefined
+        ),
+      }
+    : null
+  const showUpgradeModal = isPlanLimitReachedCode(resolvedSearchParams?.code) && isActuallyAtPlanLimit
+  const internshipTotal = internshipCounts.totalCount
   const showCreateInternshipForm =
     createOnly ||
     resolvedSearchParams?.create === '1' ||
@@ -898,11 +1377,22 @@ export default async function EmployerDashboardPage({
     (resolvedSearchParams?.concierge === '1' ||
       resolvedSearchParams?.concierge_success === '1' ||
       Boolean(resolvedSearchParams?.concierge_error))
-  const draftInternships = (internships ?? []).filter((internship) => internship.status !== 'published' && !internship.is_active)
-  const publishedInternships = (internships ?? []).filter((internship) => internship.status === 'published' || internship.is_active)
+  const activeInternships = internships.filter((internship) => isEmployerInternshipActive(internship))
+  const inactiveInternships = internships.filter((internship) => !isEmployerInternshipActive(internship))
+  const activeInternshipItems: ActiveInternshipListItem[] = activeInternships.map((internship) => ({
+    id: internship.id,
+    title: internship.title,
+    location: internship.location,
+    stateLabel: formatListingState(internship),
+    workMode: internship.work_mode,
+    createdAtLabel: new Date(internship.created_at).toLocaleDateString(),
+    targetYearsLabel: formatTargetStudentYears(internship.target_student_years ?? [internship.target_student_year]),
+    majorsLabel: internship.majors ? formatMajors(internship.majors) : null,
+  }))
 
   return (
     <main className="min-h-screen bg-white">
+      <ListingDraftCleanup userId={user.id} clearedDraftId={String(resolvedSearchParams?.draft_cleared ?? '')} />
       <section className="mx-auto max-w-5xl px-6 py-10">
         <div className="mb-3">
           {createOnly ? (
@@ -926,14 +1416,22 @@ export default async function EmployerDashboardPage({
           </div>
         </div>
 
+        {!createOnly && resolvedSearchParams?.published_id ? (
+          <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            Internship published.
+            <Link href={`/jobs/${encodeURIComponent(resolvedSearchParams.published_id)}`} className="ml-2 font-medium underline">
+              View listing
+            </Link>
+          </div>
+        ) : null}
+        {!createOnly && publishedOwnerMismatchMessage ? (
+          <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {publishedOwnerMismatchMessage}
+          </div>
+        ) : null}
+
         {!createOnly ? (
-        <div className="mt-5 grid gap-2 sm:grid-cols-3">
-          <Link
-            href="/dashboard/employer"
-            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Manage internships
-          </Link>
+        <div className="mt-5 grid gap-2 sm:ml-auto sm:max-w-md sm:grid-cols-2">
           <Link
             href="/dashboard/employer/applicants"
             className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
@@ -951,8 +1449,8 @@ export default async function EmployerDashboardPage({
 
         {!createOnly ? (
         <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
               <h2 className="text-base font-semibold text-slate-900">Your internships</h2>
               <p className="mt-1 text-xs text-slate-600">
                 {isUnlimitedInternships(plan)
@@ -963,97 +1461,65 @@ export default async function EmployerDashboardPage({
                 </Link>
               </p>
             </div>
-            <span className="text-xs text-slate-500">{internshipTotal} total</span>
+            <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:items-end">
+              <CreateInternshipCta
+                atLimit={plan.maxActiveInternships !== null && activeInternshipsCount >= plan.maxActiveInternships}
+                activeCount={activeInternshipsCount}
+                planLimit={plan.maxActiveInternships}
+              />
+              <span className="text-xs text-slate-500 sm:text-right">{internshipTotal} total</span>
+            </div>
           </div>
 
-          {!internships || internships.length === 0 ? (
+          {internships.length === 0 ? (
             <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
               You have not created any internships yet.
+              <p className="mt-1 text-xs text-slate-500">Click “Create internship” to post your first role.</p>
             </div>
           ) : (
             <div className="mt-4 space-y-6">
               <div>
-                <h3 className="text-sm font-semibold text-slate-900">Published</h3>
-                {publishedInternships.length === 0 ? (
-                  <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">No published listings yet.</div>
+                <h3 className="text-sm font-semibold text-slate-900">Active</h3>
+                <ActiveInternshipsList
+                  internships={activeInternshipItems}
+                  toggleInternshipActiveAction={toggleInternshipActive}
+                  deletePublishedInternshipAction={deletePublishedInternship}
+                />
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Inactive</h3>
+                {inactiveInternships.length === 0 ? (
+                  <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">No inactive listings.</div>
                 ) : (
                   <div className="mt-2 grid gap-3">
-                    {publishedInternships.map((internship) => (
+                    {inactiveInternships.map((internship) => (
                       <div key={internship.id} className="rounded-xl border border-slate-200 p-4">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                           <div>
                             <div className="text-sm font-semibold text-slate-900">{internship.title || 'Untitled listing'}</div>
                             <div className="text-xs text-slate-500">
-                              {internship.location} • Published
-                              {internship.work_mode ? ` • ${internship.work_mode}` : ''}
+                              {formatListingState(internship)} •{' '}
+                              Last updated: {internship.updated_at ? new Date(internship.updated_at).toLocaleString() : 'n/a'}
                             </div>
                           </div>
-                          <div className="text-xs text-slate-500">
-                            Target years: {formatTargetStudentYears(internship.target_student_years ?? [internship.target_student_year])}
-                          </div>
+                          <div className="text-xs text-slate-500">Created: {new Date(internship.created_at).toLocaleDateString()}</div>
                         </div>
-                        {internship.majors && (
-                          <div className="mt-2 text-xs text-slate-500">
-                            Majors: {formatMajors(internship.majors)}
-                          </div>
-                        )}
                         <div className="mt-3 flex flex-wrap gap-2">
-                          <Link
-                            href={`/jobs/${internship.id}`}
-                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                          >
-                            View details
-                          </Link>
-                          <Link
-                            href={`/inbox?internship_id=${encodeURIComponent(internship.id)}`}
-                            className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                          >
-                            Applicants
-                          </Link>
                           <Link
                             href={`/dashboard/employer/new?edit=${encodeURIComponent(internship.id)}`}
                             className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
                           >
                             Edit
                           </Link>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">Drafts</h3>
-                {draftInternships.length === 0 ? (
-                  <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">No drafts saved.</div>
-                ) : (
-                  <div className="mt-2 grid gap-3">
-                    {draftInternships.map((internship) => (
-                      <div key={internship.id} className="rounded-xl border border-slate-200 p-4">
-                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                          <div>
-                            <div className="text-sm font-semibold text-slate-900">{internship.title || 'Untitled draft'}</div>
-                            <div className="text-xs text-slate-500">
-                              Last updated: {internship.updated_at ? new Date(internship.updated_at).toLocaleString() : 'n/a'}
-                            </div>
-                          </div>
-                          <div className="text-xs text-slate-500">Status: Draft</div>
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <Link
-                            href={`/dashboard/employer/new?edit=${encodeURIComponent(internship.id)}`}
-                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                          >
-                            Edit draft
-                          </Link>
-                          <form action={publishDraft}>
+                          <form action={toggleInternshipActive}>
                             <input type="hidden" name="internship_id" value={internship.id} />
+                            <input type="hidden" name="next_active" value="1" />
                             <button
                               type="submit"
                               className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
                             >
-                              Publish
+                              Activate
                             </button>
                           </form>
                           <form action={deleteDraft}>
@@ -1073,32 +1539,6 @@ export default async function EmployerDashboardPage({
               </div>
             </div>
           )}
-        </div>
-        ) : null}
-
-        {!createOnly ? (
-        <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm text-slate-700">
-              {internshipTotal > 0 ? 'Create another listing in under 2 minutes.' : 'Create your first listing in under 2 minutes.'}
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Link
-                href="/dashboard/employer/new"
-                className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
-              >
-                Create internship
-              </Link>
-              {launchConciergeEnabled ? (
-                <Link
-                  href="/dashboard/employer?concierge=1"
-                  className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Send concierge request
-                </Link>
-              ) : null}
-            </div>
-          </div>
         </div>
         ) : null}
 
@@ -1234,8 +1674,9 @@ export default async function EmployerDashboardPage({
               formAction={createInternship}
               internshipId={editingInternship?.id ?? ''}
               userId={user.id}
-              draftKey={editingInternship?.id ?? 'new'}
+              draftId={editingInternship?.id ?? requestedDraftId ?? 'new'}
               clearOnSuccess={Boolean(resolvedSearchParams?.success)}
+              serverError={listingWizardServerError}
               initialValues={{
                 title: editingInternship?.title ?? '',
                 companyName: editingInternship?.company_name ?? employerProfile?.company_name ?? '',
@@ -1276,7 +1717,6 @@ export default async function EmployerDashboardPage({
               majorCatalog={canonicalMajorCatalog}
               courseworkCategoryCatalog={courseCategoryCatalog}
               employerBaseState={employerBaseState}
-              showTurnstile={plan.id === 'free'}
             />
           </div>
         ) : null}

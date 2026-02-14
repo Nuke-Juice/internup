@@ -1,6 +1,8 @@
 'use client'
 
+import { useMemo } from 'react'
 import CatalogMultiSelect from '@/components/forms/CatalogMultiSelect'
+import { normalizeCatalogToken } from '@/lib/catalog/normalization'
 import type { CatalogOption } from './types'
 
 type Props = {
@@ -15,7 +17,44 @@ type Props = {
   onResumeRequiredChange: (value: boolean) => void
 }
 
+const CURATED_COURSEWORK_LABELS = [
+  'Financial Accounting',
+  'Managerial Accounting',
+  'Business Statistics',
+  'Corporate Finance',
+  'Operations Management',
+  'Business Law',
+  'Statistics',
+  'Regression',
+  'SQL',
+  'Data Visualization',
+  'Machine Learning',
+  'Python',
+  'R',
+  'Data Structures',
+  'Algorithms',
+  'Database Systems',
+  'Systems Programming',
+  'Software Engineering',
+  'Digital Marketing',
+  'SEO/SEM',
+  'Marketing Analytics',
+  'Consumer Behavior',
+  'Supply Chain',
+  'Logistics',
+  'Lean/Six Sigma',
+]
+
 export default function ListingStepRequirements(props: Props) {
+  const courseworkOptions = useMemo(() => {
+    const existing = new Set(props.courseworkCategoryCatalog.map((item) => normalizeCatalogToken(item.name)))
+    const suggested = CURATED_COURSEWORK_LABELS.filter((label) => !existing.has(normalizeCatalogToken(label))).map((label) => ({
+      id: `custom:${normalizeCatalogToken(label)}`,
+      name: label,
+    }))
+    return [...props.courseworkCategoryCatalog, ...suggested]
+  }, [props.courseworkCategoryCatalog])
+
   return (
     <div className="space-y-4">
       <CatalogMultiSelect
@@ -63,9 +102,9 @@ export default function ListingStepRequirements(props: Props) {
         idsFieldName="required_course_category_ids"
         customFieldName="required_course_category_custom"
         inputId="employer-course-categories-input"
-        options={props.courseworkCategoryCatalog}
+        options={courseworkOptions}
         initialLabels={props.courseworkCategoryLabels}
-        allowCustom={false}
+        allowCustom
       />
 
       <div>

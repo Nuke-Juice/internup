@@ -9,6 +9,7 @@ import { normalizeCatalogLabel, normalizeCatalogToken, slugifyCatalogLabel } fro
 import { mapCourseworkTextToCategories } from '@/lib/coursework/mapCourseworkCategories'
 import { normalizeCoursework } from '@/lib/coursework/normalizeCoursework'
 import { getGraduationYearOptions } from '@/lib/internships/formOptions'
+import { normalizeLocationType } from '@/lib/internships/locationType'
 import {
   deriveTermFromRange,
   getEndYearOptions,
@@ -570,7 +571,7 @@ export default async function AdminInternshipEditPage({
         admin_notes: adminNotes,
         template_used: templateUsed,
         work_mode: workMode || null,
-        location_type: workMode || null,
+        location_type: normalizeLocationType(workMode),
       })
       .eq('id', internshipId)
 

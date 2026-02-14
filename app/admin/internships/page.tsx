@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
+import { revalidatePath } from 'next/cache'
 import { isVerifiedEmployerStatus } from '@/lib/billing/subscriptions'
 import { requireAnyRole } from '@/lib/auth/requireAnyRole'
 import { ADMIN_ROLES } from '@/lib/auth/roles'
@@ -16,6 +17,7 @@ import { mapCourseworkTextToCategories } from '@/lib/coursework/mapCourseworkCat
 import { normalizeCoursework } from '@/lib/coursework/normalizeCoursework'
 import { getGraduationYearOptions } from '@/lib/internships/formOptions'
 import { deriveTermFromRange, getEndYearOptions, getMonthOptions, getStartYearOptions } from '@/lib/internships/term'
+import { normalizeLocationType } from '@/lib/internships/locationType'
 import { isVerifiedCityForState, normalizeStateCode } from '@/lib/locations/usLocationCatalog'
 import { normalizeSkills } from '@/lib/skills/normalizeSkills'
 import { sanitizeSkillLabels } from '@/lib/skills/sanitizeSkillLabels'
@@ -678,7 +680,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
       admin_notes: adminNotes,
       template_used: templateUsed,
       work_mode: remoteAllowed ? 'remote' : 'on-site',
-      location_type: remoteAllowed ? 'remote' : 'on-site',
+      location_type: normalizeLocationType(remoteAllowed ? 'remote' : 'on-site'),
     })
       .select('id')
       .single()
@@ -879,6 +881,71 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
     redirect(`${href}${href.includes('?') ? '&' : '?'}success=Internship+status+updated`)
   }
 
+  async function deleteInternship(formData: FormData) {
+    'use server'
+
+    await requireAnyRole(ADMIN_ROLES, { requestedPath: '/admin/internships' })
+    const adminWrite = supabaseAdmin()
+
+    const internshipId = String(formData.get('internship_id') ?? '').trim()
+    const confirmationPhrase = String(formData.get('confirmation_phrase') ?? '').trim().toUpperCase()
+    const qValue = String(formData.get('q') ?? '').trim()
+    const pageValue = normalizePage(String(formData.get('page') ?? '1'))
+    const templateValue = String(formData.get('template') ?? '').trim()
+
+    if (!internshipId) {
+      redirect('/admin/internships?error=Missing+internship+id')
+    }
+    if (confirmationPhrase !== 'DELETE') {
+      redirect('/admin/internships?error=Deletion+not+confirmed')
+    }
+
+    const deleteByInternshipId = async (table: string) => {
+      const { error } = await adminWrite.from(table).delete().eq('internship_id', internshipId)
+      if (error) {
+        redirect(`/admin/internships?error=${encodeURIComponent(error.message)}`)
+      }
+    }
+
+    await deleteByInternshipId('applications')
+    await deleteByInternshipId('internship_required_skill_items')
+    await deleteByInternshipId('internship_preferred_skill_items')
+    await deleteByInternshipId('internship_required_course_categories')
+    await deleteByInternshipId('internship_coursework_items')
+    await deleteByInternshipId('internship_coursework_category_links')
+    await deleteByInternshipId('internship_major_links')
+    await deleteByInternshipId('internship_events')
+
+    const { error: claimTokenError } = await adminWrite
+      .from('employer_claim_tokens')
+      .delete()
+      .eq('internship_id', internshipId)
+    if (claimTokenError) {
+      redirect(`/admin/internships?error=${encodeURIComponent(claimTokenError.message)}`)
+    }
+
+    const { error } = await adminWrite
+      .from('internships')
+      .delete()
+      .eq('id', internshipId)
+
+    if (error) {
+      redirect(`/admin/internships?error=${encodeURIComponent(error.message)}`)
+    }
+
+    revalidatePath('/admin/internships')
+    revalidatePath('/')
+    revalidatePath('/jobs')
+    revalidatePath(`/jobs/${internshipId}`)
+
+    const href = buildPageHref({
+      q: qValue || undefined,
+      page: pageValue,
+      template: templateValue || undefined,
+    })
+    redirect(`${href}${href.includes('?') ? '&' : '?'}success=Internship+deleted`)
+  }
+
   const defaultResponsibilities = formatList(selectedTemplate?.responsibilities)
   const defaultQualifications = formatList(selectedTemplate?.qualifications)
   const defaultRequiredSkills = formatList(selectedTemplate?.required_skills)
@@ -1034,6 +1101,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
                       missingCoverageFields.length > 0
                         ? `Missing: ${missingCoverageFields.join(', ')}`
                         : 'All key matching fields present'
+                    const deleteModalId = `admin-delete-internship-${row.id}`
 
                     return (
                       <tr key={row.id}>
@@ -1077,6 +1145,7 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
                           </Link>
                         </td>
                         <td className="px-3 py-3">
+                          <input id={deleteModalId} type="checkbox" className="peer sr-only" />
                           <div className="flex flex-wrap items-center gap-2">
                             <Link
                               href={`/admin/internships/${row.id}`}
@@ -1103,6 +1172,50 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
                                 {row.is_active ? 'Deactivate' : 'Activate'}
                               </button>
                             </form>
+                            <label
+                              htmlFor={deleteModalId}
+                              className="cursor-pointer rounded-md border border-red-300 bg-red-50 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
+                            >
+                              Delete
+                            </label>
+                          </div>
+                          <label
+                            htmlFor={deleteModalId}
+                            className="pointer-events-none fixed inset-0 z-40 hidden bg-slate-900/50 peer-checked:pointer-events-auto peer-checked:block"
+                          />
+                          <div className="pointer-events-none fixed inset-0 z-50 hidden items-center justify-center p-4 peer-checked:flex">
+                            <div className="pointer-events-auto w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-2xl">
+                              <h3 className="text-lg font-semibold text-slate-900">Delete internship?</h3>
+                              <p className="mt-2 text-sm text-slate-600">
+                                This will permanently remove this listing and its applicants. This cannot be undone.
+                              </p>
+                              <form action={deleteInternship} className="mt-4 space-y-3">
+                                <input type="hidden" name="internship_id" value={row.id} />
+                                <input type="hidden" name="q" value={q} />
+                                <input type="hidden" name="page" value={String(page)} />
+                                <input type="hidden" name="template" value={selectedTemplateKey} />
+                                <input
+                                  name="confirmation_phrase"
+                                  placeholder="Type DELETE to confirm"
+                                  className="w-full rounded-md border border-red-300 px-3 py-2 text-sm text-slate-900"
+                                  autoComplete="off"
+                                />
+                                <div className="flex items-center justify-end gap-2">
+                                  <label
+                                    htmlFor={deleteModalId}
+                                    className="cursor-pointer rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                                  >
+                                    Cancel
+                                  </label>
+                                  <button
+                                    type="submit"
+                                    className="rounded-md bg-red-600 px-3 py-2 text-sm font-medium text-white hover:bg-red-700"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </form>
+                            </div>
                           </div>
                         </td>
                       </tr>

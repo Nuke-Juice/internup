@@ -30,6 +30,10 @@ function sameToken(left: string, right: string) {
   return normalizeCatalogToken(left) === normalizeCatalogToken(right)
 }
 
+function isCustomOptionId(id: string | null | undefined) {
+  return typeof id === 'string' && id.startsWith('custom:')
+}
+
 export default function CatalogMultiSelect({
   label,
   fieldName,
@@ -102,7 +106,7 @@ export default function CatalogMultiSelect({
 
   function addOption(option: CatalogOption) {
     if (selected.some((item) => item.id === option.id || sameToken(item.label, option.name))) return
-    setSelected((prev) => [...prev, { id: option.id, label: option.name }])
+    setSelected((prev) => [...prev, { id: isCustomOptionId(option.id) ? null : option.id, label: option.name }])
     setQuery('')
     setShowMenu(false)
   }
@@ -123,11 +127,7 @@ export default function CatalogMultiSelect({
               key={`${item.id ?? 'custom'}:${item.label}`}
               type="button"
               onClick={() => removeItem(item.label)}
-              className={`rounded-full border px-3 py-1 text-xs ${
-                item.id
-                  ? 'border-blue-200 bg-blue-50 text-blue-800'
-                  : 'border-amber-200 bg-amber-50 text-amber-800'
-              }`}
+              className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs text-blue-800 hover:border-blue-300 hover:bg-blue-100"
             >
               {item.label} ×
             </button>

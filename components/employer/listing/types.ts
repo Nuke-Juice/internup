@@ -6,6 +6,26 @@ export type CatalogOption = {
   name: string
 }
 
+export type ListingStep1FieldKey =
+  | 'title'
+  | 'category'
+  | 'work_mode'
+  | 'location_city'
+  | 'location_state'
+  | 'external_apply_url'
+
+export type ListingStep2FieldKey =
+  | 'pay_min'
+  | 'pay_max'
+  | 'hours_min'
+  | 'hours_max'
+  | 'duration_weeks'
+  | 'start_date'
+  | 'application_deadline'
+
+export type ListingStep4FieldKey =
+  | 'short_summary'
+
 export type ListingTemplate = {
   key: string
   label: string
