@@ -17,6 +17,12 @@ export default async function AdminDashboardPage() {
           <div className="mb-2 text-sm font-medium text-slate-800">Quick actions</div>
           <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
             <Link
+              href="/admin/listings-queue"
+              className="inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Listings queue
+            </Link>
+            <Link
               href="/admin/internships"
               className="inline-flex h-9 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 text-xs font-medium text-slate-700 hover:bg-slate-100"
             >

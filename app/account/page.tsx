@@ -1,9 +1,9 @@
 import Link from 'next/link'
-import { ArrowLeft } from 'lucide-react'
 import { redirect } from 'next/navigation'
 import EmployerAccount from '@/components/account/EmployerAccount'
 import StudentAccount from '@/components/account/StudentAccount'
 import ConfirmSignOutButton from '@/components/auth/ConfirmSignOutButton'
+import HistoryBackButton from '@/components/navigation/HistoryBackButton'
 import { ensureUserRole } from '@/lib/auth/ensureUserRole'
 import { buildVerifyRequiredHref } from '@/lib/auth/emailVerification'
 import { getEmployerVerificationStatus } from '@/lib/billing/subscriptions'
@@ -318,13 +318,7 @@ export default async function AccountPage() {
       <main className="min-h-screen bg-slate-50 px-6 py-10">
         <div className="mx-auto max-w-5xl">
           <div className="mb-4 flex items-center justify-between">
-            <Link
-              href="/"
-              aria-label="Go back"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </Link>
+            <HistoryBackButton fallbackHref="/dashboard/student" />
             <Link
               href="/account/security"
               className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
@@ -475,13 +469,7 @@ export default async function AccountPage() {
     <main className="min-h-screen bg-slate-50 px-6 py-10">
       <div className="mx-auto max-w-6xl">
         <div className="mb-4">
-          <Link
-            href="/"
-            aria-label="Go back"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </Link>
+          <HistoryBackButton fallbackHref="/dashboard/employer" />
         </div>
         <EmployerAccount
           userId={user.id}
@@ -490,7 +478,6 @@ export default async function AccountPage() {
           initialLastName={employerLastName}
           initialProfile={profileWithFallback}
           initialPublicProfile={publicProfileWithFallback}
-          recentInternships={recentInternships}
           planId={planId}
           isVerifiedEmployer={isVerifiedEmployer}
           isEmailVerified={isEmailVerified}

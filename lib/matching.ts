@@ -11,6 +11,9 @@ export type InternshipMatchInput = {
   work_mode?: string | null
   term?: string | null
   experience_level?: string | null
+  target_student_year?: string | null
+  desired_coursework_strength?: string | null
+  required_course_category_ids?: string[] | null
   category?: string | null
   required_skills?: string[] | string | null
   preferred_skills?: string[] | string | null
@@ -286,19 +289,34 @@ function normalizeGradYearToken(value: string) {
 function parseInternshipExperienceLevel(value: string | null | undefined) {
   if (!value) return null
   const normalized = normalizeText(value)
+  if (normalized === 'any') return null
+  if (normalized === 'freshman') return 0
+  if (normalized === 'sophomore') return 1
+  if (normalized === 'junior') return 2
+  if (normalized === 'senior') return 3
   if (normalized === 'entry') return 0
-  if (normalized === 'mid') return 1
-  if (normalized === 'senior') return 2
+  if (normalized === 'mid') return 2
   return null
 }
 
 function parseStudentExperienceLevel(value: string | null | undefined) {
   if (!value) return null
   const normalized = normalizeText(value)
+  if (normalized === 'freshman') return 0
+  if (normalized === 'sophomore') return 1
+  if (normalized === 'junior') return 2
+  if (normalized === 'senior') return 3
   if (normalized === 'none') return 0
   if (normalized === 'projects') return 1
   if (normalized === 'internship') return 2
   return null
+}
+
+function courseworkStrengthMinimumCount(value: string | null | undefined) {
+  const normalized = normalizeText(value ?? '')
+  if (normalized === 'high') return 5
+  if (normalized === 'medium') return 3
+  return 1
 }
 
 export function getMatchMaxScore(weights: MatchWeights = DEFAULT_MATCHING_WEIGHTS) {
@@ -520,7 +538,9 @@ export function evaluateInternshipMatch(
   const studentExperienceLevel = parseStudentExperienceLevel(profile.experience_level)
   const internshipMajors = parseMajors(internship.majors)
   const targetGradYears = parseList(internship.target_graduation_years).map(normalizeGradYearToken)
-  const internshipExperienceLevel = parseInternshipExperienceLevel(internship.experience_level)
+  const internshipExperienceLevel = parseInternshipExperienceLevel(
+    internship.target_student_year ?? internship.experience_level
+  )
   const internshipCategory = internship.category ? normalizeText(internship.category) : internshipMajors[0] ?? ''
 
   const studentSkills = [
@@ -630,26 +650,30 @@ export function evaluateInternshipMatch(
     }
   }
 
-  const recommendedCourseworkCategoryIds = Array.from(new Set((internship.coursework_category_ids ?? []).filter(Boolean)))
+  const recommendedCourseworkCategoryIds = Array.from(
+    new Set([...(internship.required_course_category_ids ?? []), ...(internship.coursework_category_ids ?? [])].filter(Boolean))
+  )
   const recommendedCourseworkCategoryNames = Array.from(new Set(parseList(internship.coursework_category_names)))
 
   if (recommendedCourseworkCategoryIds.length > 0 && studentCourseworkCategoryIds.length > 0) {
     const categoryHits = overlapCount(recommendedCourseworkCategoryIds, studentCourseworkCategoryIds)
+    const requiredHitsByStrength = courseworkStrengthMinimumCount(internship.desired_coursework_strength)
+    const strengthRatio = ratio(Math.min(categoryHits, requiredHitsByStrength), requiredHitsByStrength)
     const categoryRatio = ratio(categoryHits, recommendedCourseworkCategoryIds.length)
-    const points = weights.courseworkAlignment * categoryRatio
+    const points = weights.courseworkAlignment * Math.max(categoryRatio, strengthRatio)
     signalContributions.courseworkAlignment = {
       signalKey: 'courseworkAlignment',
       weight: weights.courseworkAlignment,
       rawMatchValue: categoryRatio,
       pointsAwarded: points,
-      evidence: [`${categoryHits}/${recommendedCourseworkCategoryIds.length} coursework categories matched`],
+      evidence: [`${categoryHits}/${recommendedCourseworkCategoryIds.length} coursework categories matched`, `strength=${internship.desired_coursework_strength ?? 'low'}`],
     }
 
     if (categoryHits > 0) {
       const categoryDetail =
         recommendedCourseworkCategoryNames.length > 0
           ? recommendedCourseworkCategoryNames.slice(0, categoryHits).join(', ')
-          : `${categoryHits}/${recommendedCourseworkCategoryIds.length} category matches`
+          : `${categoryHits}/${recommendedCourseworkCategoryIds.length} category matches (${internship.desired_coursework_strength ?? 'low'} strength)`
       reasonsWithPoints.push({
         reasonKey: 'coursework.categories.canonical_overlap',
         text: describeReason('Coursework categories', points, categoryDetail),

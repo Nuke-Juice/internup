@@ -14,6 +14,17 @@ function formatMajors(value: string[] | string | null) {
   return value
 }
 
+function formatTargetYear(value: string | null | undefined) {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'any') return 'Any year'
+  if (normalized === 'freshman') return 'Freshman'
+  if (normalized === 'sophomore') return 'Sophomore'
+  if (normalized === 'junior') return 'Junior'
+  if (normalized === 'senior') return 'Senior'
+  return value
+}
+
 function seasonFromMonth(value: string | null | undefined) {
   const normalized = (value ?? '').trim().toLowerCase()
   if (normalized.startsWith('jun') || normalized.startsWith('jul') || normalized.startsWith('aug')) return 'summer'
@@ -101,9 +112,9 @@ export default async function JobDetailPage({
   }
 
   const listingSelectRich =
-    'id, title, company_name, employer_id, employer_verification_tier, location, location_city, location_state, experience_level, majors, target_graduation_years, description, hours_per_week, role_category, work_mode, term, required_skills, preferred_skills, recommended_coursework, application_deadline, internship_required_skill_items(skill_id), internship_preferred_skill_items(skill_id), internship_coursework_items(coursework_item_id), internship_coursework_category_links(category_id, category:coursework_categories(name))'
+    'id, title, company_name, employer_id, employer_verification_tier, location, location_city, location_state, experience_level, target_student_year, majors, target_graduation_years, description, hours_per_week, role_category, work_mode, term, apply_mode, external_apply_url, required_skills, preferred_skills, recommended_coursework, application_deadline, internship_required_skill_items(skill_id), internship_preferred_skill_items(skill_id), internship_coursework_items(coursework_item_id), internship_coursework_category_links(category_id, category:coursework_categories(name))'
   const listingSelectBase =
-    'id, title, company_name, employer_id, employer_verification_tier, location, location_city, location_state, experience_level, majors, target_graduation_years, description, hours_per_week, role_category, work_mode, term, required_skills, preferred_skills, recommended_coursework, application_deadline'
+    'id, title, company_name, employer_id, employer_verification_tier, location, location_city, location_state, experience_level, target_student_year, majors, target_graduation_years, description, hours_per_week, role_category, work_mode, term, apply_mode, external_apply_url, required_skills, preferred_skills, recommended_coursework, application_deadline'
 
   const { data: richListing, error: richListingError } = await supabase
     .from('internships')
@@ -324,10 +335,12 @@ export default async function JobDetailPage({
     )
   }
 
+  const viewDay = new Date().toISOString().slice(0, 10)
+  const viewDedupeKey = user?.id ? `view:${listing.id}:${user.id}:${viewDay}` : null
   await trackAnalyticsEvent({
     eventName: 'view_job_detail',
     userId: user?.id ?? null,
-    properties: { listing_id: listing.id },
+    properties: { listing_id: listing.id, dedupe_key: viewDedupeKey },
   })
 
   return (
@@ -374,9 +387,9 @@ export default async function JobDetailPage({
                       {listing.term}
                     </span>
                   ) : null}
-                  {listing.experience_level ? (
+                  {formatTargetYear((listing as { target_student_year?: string | null }).target_student_year ?? listing.experience_level) ? (
                     <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
-                      {listing.experience_level}
+                      {formatTargetYear((listing as { target_student_year?: string | null }).target_student_year ?? listing.experience_level)}
                     </span>
                   ) : null}
                 </div>
@@ -556,10 +569,16 @@ export default async function JobDetailPage({
 
               <ApplyButton
                 listingId={listing.id}
+                applyMode={listing.apply_mode}
                 isAuthenticated={Boolean(user)}
                 userRole={userRole}
                 className="mt-4 inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
               />
+              {listing.apply_mode === 'ats_link' || listing.apply_mode === 'hybrid' ? (
+                <p className="mt-2 text-xs text-blue-900">
+                  You will quick apply here first, then complete the employer ATS application.
+                </p>
+              ) : null}
             </div>
           </aside>
         </div>

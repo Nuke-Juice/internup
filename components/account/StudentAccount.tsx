@@ -823,6 +823,7 @@ export default function StudentAccount({ userId, initialProfile }: Props) {
 function addCourseworkItem(value: string) {
     const normalized = normalizeCourseworkName(value)
     if (!normalized || includesCoursework(coursework, normalized)) return
+    if (!addCourseworkOptions.some((course) => normalizeCourseworkName(course).toLowerCase() === normalized.toLowerCase())) return
     setCoursework((prev) => [...prev, normalized])
     setCourseworkInput('')
   }
@@ -1147,6 +1148,40 @@ function addCourseworkItem(value: string) {
       if (insertCourseworkItemsError) {
         setError(insertCourseworkItemsError.message)
         return
+      }
+    }
+
+    const { error: clearStudentCoursesError } = await supabase
+      .from('student_courses')
+      .delete()
+      .eq('student_profile_id', userId)
+    if (clearStudentCoursesError) {
+      setError(clearStudentCoursesError.message)
+      return
+    }
+
+    if (normalizedCourseworkList.length > 0) {
+      const { data: canonicalCourseRows } = await supabase
+        .from('canonical_courses')
+        .select('id, name')
+        .in('name', normalizedCourseworkList)
+        .limit(250)
+
+      const canonicalCourseIds = (canonicalCourseRows ?? [])
+        .map((row) => row.id)
+        .filter((id): id is string => typeof id === 'string')
+
+      if (canonicalCourseIds.length > 0) {
+        const { error: insertStudentCoursesError } = await supabase.from('student_courses').insert(
+          canonicalCourseIds.map((courseId) => ({
+            student_profile_id: userId,
+            course_id: courseId,
+          }))
+        )
+        if (insertStudentCoursesError) {
+          setError(insertStudentCoursesError.message)
+          return
+        }
       }
     }
 
@@ -2062,8 +2097,8 @@ function addCourseworkItem(value: string) {
               </div>
               <p className="mt-1 text-xs text-slate-500">
                 {hasScopedUniversityCatalog
-                  ? 'Type to pick coursework tuned to your selected university, or press Enter to add custom coursework.'
-                  : 'Type to pick canonical coursework, or press Enter to add custom coursework.'}
+                  ? 'Type to pick coursework tuned to your selected university.'
+                  : 'Type to pick canonical coursework.'}
               </p>
 
               <div className="mt-3 flex flex-wrap gap-2">

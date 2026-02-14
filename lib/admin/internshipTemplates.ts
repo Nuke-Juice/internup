@@ -1,17 +1,7 @@
-export const INTERNSHIP_CATEGORIES = [
-  'Finance',
-  'Accounting',
-  'Data',
-  'Marketing',
-  'Operations',
-  'Product',
-  'Design',
-  'Sales',
-  'HR',
-  'Engineering',
-] as const
+import { INTERNSHIP_CATEGORIES, type InternshipCategory } from '@/lib/internships/categories'
 
-export type InternshipCategory = (typeof INTERNSHIP_CATEGORIES)[number]
+export { INTERNSHIP_CATEGORIES }
+export type { InternshipCategory }
 
 export type InternshipTemplate = {
   key: string
@@ -75,7 +65,7 @@ export const INTERNSHIP_TEMPLATES: readonly InternshipTemplate[] = [
     key: 'data_analyst_intern',
     label: 'Data Analyst Intern',
     title: 'Data Analyst Intern',
-    category: 'Data',
+    category: 'Data Analytics',
     experience_level: 'entry',
     description: 'Help analyze growth and user behavior data to deliver clear recommendations to product and ops stakeholders.',
     responsibilities: ['Write SQL queries for reporting', 'Build dashboard views for core metrics', 'Present weekly insights and recommendations'],
@@ -245,7 +235,7 @@ export const INTERNSHIP_TEMPLATES: readonly InternshipTemplate[] = [
     key: 'product_analytics_intern',
     label: 'Product Analytics Intern',
     title: 'Product Analytics Intern',
-    category: 'Data',
+    category: 'Data Analytics',
     experience_level: 'entry',
     description: 'Partner with product managers to define metrics, build dashboards, and evaluate feature impact.',
     responsibilities: ['Define product KPI tracking plans', 'Build product usage dashboards', 'Analyze experiment outcomes'],

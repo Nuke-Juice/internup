@@ -27,6 +27,10 @@ export async function POST(request: Request) {
   const {
     data: { user },
   } = await supabase.auth.getUser()
+  if ((eventName === 'click_apply' || eventName === 'apply_click') && typeof properties.listing_id === 'string' && user?.id) {
+    const day = new Date().toISOString().slice(0, 10)
+    properties.dedupe_key = `click:${properties.listing_id}:${user.id}:${day}`
+  }
 
   await trackAnalyticsEvent({
     eventName,

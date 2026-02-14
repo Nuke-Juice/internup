@@ -4,13 +4,21 @@ import { useMemo } from 'react'
 
 type Props = {
   listingId: string
+  applyMode?: 'native' | 'ats_link' | 'hybrid' | string | null
   isAuthenticated: boolean
   userRole?: 'student' | 'employer' | null
   isClosed?: boolean
   className?: string
 }
 
-export default function ApplyButton({ listingId, isAuthenticated, userRole = null, isClosed = false, className }: Props) {
+export default function ApplyButton({
+  listingId,
+  applyMode = 'native',
+  isAuthenticated,
+  userRole = null,
+  isClosed = false,
+  className,
+}: Props) {
   const buttonClassName = useMemo(
     () =>
       className ||
@@ -24,7 +32,7 @@ export default function ApplyButton({ listingId, isAuthenticated, userRole = nul
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          event_name: 'click_apply',
+          event_name: 'apply_click',
           properties: { listing_id: listingId, is_authenticated: isAuthenticated, user_role: userRole ?? null },
         }),
         keepalive: true,
@@ -33,6 +41,10 @@ export default function ApplyButton({ listingId, isAuthenticated, userRole = nul
       // no-op
     }
   }
+
+  const mode = applyMode === 'ats_link' || applyMode === 'hybrid' ? applyMode : 'native'
+  const applyHref = mode === 'native' ? `/apply/${listingId}` : `/apply/${listingId}?quick=1`
+  const applyLabel = mode === 'native' ? 'Apply' : 'Quick apply'
 
   if (isClosed) {
     return (
@@ -58,13 +70,13 @@ export default function ApplyButton({ listingId, isAuthenticated, userRole = nul
   if (isAuthenticated && userRole === 'student') {
     return (
       <a
-        href={`/apply/${listingId}`}
+        href={applyHref}
         className={buttonClassName}
         onClick={() => {
           void trackApplyClick()
         }}
       >
-        Apply
+        {applyLabel}
       </a>
     )
   }
@@ -84,8 +96,8 @@ export default function ApplyButton({ listingId, isAuthenticated, userRole = nul
   }
 
   return (
-    <a
-      href={`/signup/student?next=${encodeURIComponent(`/apply/${listingId}`)}`}
+      <a
+      href={`/signup/student?next=${encodeURIComponent(applyHref)}`}
       className={buttonClassName}
       onClick={() => {
         void trackApplyClick()

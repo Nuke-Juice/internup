@@ -28,11 +28,12 @@ export async function deleteUserAccountById(admin: SupabaseClient, userId: strin
       .filter((id): id is string => typeof id === 'string' && id.length > 0)
 
     if (internshipIds.length > 0) {
-      const [{ error: requiredSkillsError }, { error: preferredSkillsError }, { error: courseworkItemsError }, { error: courseworkCategoriesError }, { error: applicationsByInternshipError }, { error: commuteCacheByInternshipError }] = await Promise.all([
+      const [{ error: requiredSkillsError }, { error: preferredSkillsError }, { error: courseworkItemsError }, { error: courseworkCategoriesError }, { error: requiredCourseCategoriesError }, { error: applicationsByInternshipError }, { error: commuteCacheByInternshipError }] = await Promise.all([
         admin.from('internship_required_skill_items').delete().in('internship_id', internshipIds),
         admin.from('internship_preferred_skill_items').delete().in('internship_id', internshipIds),
         admin.from('internship_coursework_items').delete().in('internship_id', internshipIds),
         admin.from('internship_coursework_category_links').delete().in('internship_id', internshipIds),
+        admin.from('internship_required_course_categories').delete().in('internship_id', internshipIds),
         admin.from('applications').delete().in('internship_id', internshipIds),
         admin.from('commute_time_cache').delete().in('internship_id', internshipIds),
       ])
@@ -42,6 +43,7 @@ export async function deleteUserAccountById(admin: SupabaseClient, userId: strin
         preferredSkillsError ||
         courseworkItemsError ||
         courseworkCategoriesError ||
+        requiredCourseCategoriesError ||
         applicationsByInternshipError ||
         commuteCacheByInternshipError
 
@@ -59,11 +61,12 @@ export async function deleteUserAccountById(admin: SupabaseClient, userId: strin
       }
     }
 
-    const [{ error: applicationsByStudentError }, { error: studentSkillsError }, { error: studentCourseworkItemsError }, { error: studentCourseworkCategoriesError }, { error: commuteCacheByUserError }, { error: employerClaimTokensError }, { error: subscriptionsError }, { error: stripeCustomersError }, { error: employerProfileError }, { error: studentProfileError }, { error: userRowError }] = await Promise.all([
+    const [{ error: applicationsByStudentError }, { error: studentSkillsError }, { error: studentCourseworkItemsError }, { error: studentCourseworkCategoriesError }, { error: studentCoursesError }, { error: commuteCacheByUserError }, { error: employerClaimTokensError }, { error: subscriptionsError }, { error: stripeCustomersError }, { error: employerProfileError }, { error: studentProfileError }, { error: userRowError }] = await Promise.all([
       admin.from('applications').delete().eq('student_id', userId),
       admin.from('student_skill_items').delete().eq('student_id', userId),
       admin.from('student_coursework_items').delete().eq('student_id', userId),
       admin.from('student_coursework_category_links').delete().eq('student_id', userId),
+      admin.from('student_courses').delete().eq('student_profile_id', userId),
       admin.from('commute_time_cache').delete().eq('user_id', userId),
       admin.from('employer_claim_tokens').delete().eq('employer_id', userId),
       admin.from('subscriptions').delete().eq('user_id', userId),
@@ -78,6 +81,7 @@ export async function deleteUserAccountById(admin: SupabaseClient, userId: strin
       studentSkillsError ||
       studentCourseworkItemsError ||
       studentCourseworkCategoriesError ||
+      studentCoursesError ||
       commuteCacheByUserError ||
       employerClaimTokensError ||
       subscriptionsError ||

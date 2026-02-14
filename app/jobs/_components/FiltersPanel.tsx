@@ -30,6 +30,8 @@ type Props = {
   noMatchesHint?: NoMatchesHint | null
   basePath?: string
   anchorId?: string
+  sortingLabel?: string
+  matchingSignals?: string[]
 }
 
 const SLIDER_MIN = 0
@@ -61,7 +63,15 @@ function parseCityStateInput(value: string) {
   return { city, state: stateCandidate }
 }
 
-export default function FiltersPanel({ categories, state, noMatchesHint, basePath = '/jobs', anchorId }: Props) {
+export default function FiltersPanel({
+  categories,
+  state,
+  noMatchesHint,
+  basePath = '/jobs',
+  anchorId,
+  sortingLabel = 'Newest',
+  matchingSignals = [],
+}: Props) {
   const initialMin = clamp(parseIntOrFallback(state.hoursMin, 10), SLIDER_MIN, SLIDER_MAX)
   const initialMax = clamp(parseIntOrFallback(state.hoursMax, 40), SLIDER_MIN, SLIDER_MAX)
 
@@ -217,6 +227,17 @@ export default function FiltersPanel({ categories, state, noMatchesHint, basePat
           Clear
         </Link>
       </div>
+      <p className="mt-2 text-xs text-slate-500">Sorting by: {sortingLabel}</p>
+      {state.sort === 'best_match' && matchingSignals.length > 0 ? (
+        <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Used for matching</p>
+          <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-slate-600">
+            {matchingSignals.map((signal) => (
+              <li key={signal}>{signal}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {noMatchesHint ? (
         <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
@@ -249,12 +270,13 @@ export default function FiltersPanel({ categories, state, noMatchesHint, basePat
         </section>
 
         <section>
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Experience</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">Year in school</h3>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {[
               { label: 'Any', value: '' },
-              { label: 'Entry', value: 'entry' },
-              { label: 'Mid', value: 'mid' },
+              { label: 'Freshman', value: 'freshman' },
+              { label: 'Sophomore', value: 'sophomore' },
+              { label: 'Junior', value: 'junior' },
               { label: 'Senior', value: 'senior' },
             ].map((option) => {
               const active = state.experience === option.value

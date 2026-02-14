@@ -6,22 +6,12 @@ import { fetchInternships, formatMajors, type Internship } from '@/lib/jobs/inte
 import { normalizeStateCode } from '@/lib/locations/usLocationCatalog'
 import { parseStudentPreferenceSignals } from '@/lib/student/preferenceSignals'
 import { supabaseServer } from '@/lib/supabase/server'
+import { INTERNSHIP_CATEGORIES } from '@/lib/internships/categories'
 import FiltersPanel from '@/app/jobs/_components/FiltersPanel'
 import JobCard from '@/app/jobs/_components/JobCard'
 import JobCardSkeleton from '@/app/jobs/_components/JobCardSkeleton'
 
-const categoryTiles = [
-  'Finance',
-  'Accounting',
-  'Data',
-  'Marketing',
-  'Operations',
-  'Product',
-  'Design',
-  'Sales',
-  'HR',
-  'Engineering',
-]
+const categoryTiles = [...INTERNSHIP_CATEGORIES]
 
 export type JobsQuery = {
   sort?: string
@@ -65,6 +55,24 @@ type JobsFilterState = {
 type ActiveFilterDescriptor = {
   key: keyof JobsFilterState
   label: string
+}
+
+const SORT_CONFIG: Record<SortMode, { label: string; matchingSignals: string[] }> = {
+  best_match: {
+    label: 'Best match for you',
+    matchingSignals: [
+      'Major/category alignment',
+      'Canonical coursework categories + strength',
+      'Canonical skills overlap',
+      'Work mode and location fit',
+      'Hours and pay fit',
+      'Year in school fit',
+    ],
+  },
+  newest: {
+    label: 'Newest',
+    matchingSignals: [],
+  },
 }
 
 function normalizeSort(value: string | undefined, isStudent: boolean): SortMode {
@@ -130,10 +138,13 @@ function matchesListingFilters(listing: Internship, filters: JobsFilterState) {
   const normalizedDescription = listing.description?.toLowerCase() ?? ''
   const normalizedCategoryText = (listing.category ?? listing.role_category ?? '').toLowerCase()
   const isRemote = (listing.location ?? '').toLowerCase().includes('remote')
-  const listingExperience = (listing.experience_level ?? '').toLowerCase()
+  const listingExperience = (listing.target_student_year ?? listing.experience_level ?? '').toLowerCase()
   const parsedMinHours = filters.hoursMin ? Number(filters.hoursMin) : null
   const parsedMaxHours = filters.hoursMax ? Number(filters.hoursMax) : null
-  const listingPayRange = extractNumericPayRange(listing.pay)
+  const listingPayRange =
+    typeof listing.pay_min === 'number' && typeof listing.pay_max === 'number'
+      ? { min: listing.pay_min, max: listing.pay_max }
+      : extractNumericPayRange(listing.pay)
   const normalizedLocationCity = filters.locationCity.toLowerCase()
   const normalizedLocationState = filters.locationState.toLowerCase()
   const parsedRadius =
@@ -200,7 +211,7 @@ function getActiveFilterDescriptors(filters: JobsFilterState) {
     { key: 'category', label: 'Category' },
     { key: 'payMin', label: 'Pay range' },
     { key: 'remoteOnly', label: 'Work mode' },
-    { key: 'experience', label: 'Experience' },
+    { key: 'experience', label: 'Year in school' },
     { key: 'hoursMin', label: 'Hours min' },
     { key: 'hoursMax', label: 'Hours max' },
     { key: 'locationCity', label: 'Location (city)' },
@@ -483,7 +494,9 @@ export default async function JobsView({
         description: listing.description,
         majors: listing.majors,
         target_graduation_years: listing.target_graduation_years,
-        experience_level: listing.experience_level,
+        experience_level: listing.target_student_year ?? listing.experience_level,
+        target_student_year: listing.target_student_year ?? listing.experience_level,
+        desired_coursework_strength: listing.desired_coursework_strength ?? null,
         category: listing.role_category ?? listing.category ?? null,
         hours_per_week: listing.hours_per_week,
         location: listing.location,
@@ -549,16 +562,16 @@ export default async function JobsView({
       if (profileMajors.length > 0 && listingMajors.some((major) => profileMajors.includes(major))) {
         reasons.push(`Matches your major (${profileMajors[0]})`)
       }
-      if ((listing.experience_level ?? '').toLowerCase() === 'entry') {
-        reasons.push('Entry-level role')
-      }
       if (
         (listing.work_mode ?? '').toLowerCase().includes('remote') ||
         (listing.location ?? '').toLowerCase().includes('remote')
       ) {
         reasons.push('Remote friendly')
       }
-      const listingPayRange = extractNumericPayRange(listing.pay)
+      const listingPayRange =
+        typeof listing.pay_min === 'number' && typeof listing.pay_max === 'number'
+          ? { min: listing.pay_min, max: listing.pay_max }
+          : extractNumericPayRange(listing.pay)
       if (
         typeof parsedPayMin === 'number' &&
         Number.isFinite(parsedPayMin) &&
@@ -755,7 +768,7 @@ export default async function JobsView({
     return withSearchParams(basePath, params, anchorId)
   })()
 
-  const sortedByLabel = activeSortMode === 'best_match' ? 'Best match for you' : 'Newest'
+  const sortedByLabel = SORT_CONFIG[activeSortMode].label
   const listingsTitle = filteredInternships.length === 0 ? 'Browse internships' : 'Internships hiring now'
   const compactSignedInHero = showHero && Boolean(user)
 
@@ -903,6 +916,8 @@ export default async function JobsView({
             noMatchesHint={noMatchesHint}
             basePath={basePath}
             anchorId={anchorId}
+            sortingLabel={SORT_CONFIG[activeSortMode].label}
+            matchingSignals={SORT_CONFIG[activeSortMode].matchingSignals}
           />
 
           <div className="space-y-4">
@@ -967,6 +982,7 @@ export default async function JobsView({
                           key={listing.id}
                           listing={{
                             ...listing,
+                            experience_level: listing.target_student_year ?? listing.experience_level,
                             majorsText: formatMajors(listing.majors),
                             commuteMinutes: commuteMinutesById.get(listing.id) ?? null,
                             maxCommuteMinutes: studentMaxCommuteMinutes,
@@ -988,6 +1004,7 @@ export default async function JobsView({
                     key={listing.id}
                     listing={{
                       ...listing,
+                      experience_level: listing.target_student_year ?? listing.experience_level,
                       majorsText: formatMajors(listing.majors),
                       commuteMinutes: commuteMinutesById.get(listing.id) ?? null,
                       maxCommuteMinutes: studentMaxCommuteMinutes,

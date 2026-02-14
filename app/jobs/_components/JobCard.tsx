@@ -12,8 +12,10 @@ type Listing = {
   location_city?: string | null
   location_state?: string | null
   remote_eligibility?: string | null
+  remote_eligibility_scope?: string | null
   role_category?: string | null
   work_mode?: string | null
+  apply_mode?: string | null
   term?: string | null
   hours_min?: number | null
   hours_max?: number | null
@@ -92,6 +94,7 @@ function getLocationChips(listing: Listing): LocationChip[] {
 
   if (workModeLabel === 'Remote') {
     const remoteEligibility = listing.remote_eligibility?.trim()
+    const remoteEligibilityScope = listing.remote_eligibility_scope?.trim()
     const locationText = (listing.location ?? '').toLowerCase()
     const state = listing.location_state?.trim().toUpperCase()
     const city = listing.location_city?.trim()
@@ -101,6 +104,10 @@ function getLocationChips(listing: Listing): LocationChip[] {
       chips.push({ label: `${state === 'UT' ? 'Utah' : state}-based` })
     } else if (remoteEligibility) {
       chips.push({ label: remoteEligibility })
+    } else if (remoteEligibilityScope === 'us_only') {
+      chips.push({ label: 'US only' })
+    } else if (remoteEligibilityScope === 'worldwide') {
+      chips.push({ label: 'Worldwide' })
     } else if (locationText.includes('utah')) {
       chips.push({ label: 'Utah-based' })
     } else if (locationText.includes('salt lake city') || locationText.includes('slc')) {
@@ -144,9 +151,11 @@ function daysSince(value: string) {
 function mapExperienceLevel(value: string | null | undefined) {
   const normalized = (value ?? '').trim().toLowerCase()
   if (!normalized) return null
-  if (normalized === 'entry') return 'Entry-level'
-  if (normalized === 'intermediate' || normalized === 'mid') return 'Intermediate'
-  if (normalized === 'advanced' || normalized === 'senior') return 'Advanced'
+  if (normalized === 'freshman') return 'Freshman'
+  if (normalized === 'sophomore') return 'Sophomore'
+  if (normalized === 'junior') return 'Junior'
+  if (normalized === 'senior') return 'Senior'
+  if (normalized === 'any') return 'Any year'
   return value
 }
 
@@ -318,6 +327,7 @@ export default function JobCard({
         </Link>
         <ApplyButton
           listingId={listing.id}
+          applyMode={listing.apply_mode}
           isAuthenticated={isAuthenticated}
           userRole={userRole}
           isClosed={isClosed}

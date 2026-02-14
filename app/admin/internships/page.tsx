@@ -907,6 +907,12 @@ export default async function AdminInternshipsPage({ searchParams }: { searchPar
           <div className="mb-2 text-sm font-medium text-slate-800">Quick actions</div>
           <div className="grid gap-2 sm:grid-cols-3">
             <Link
+              href="/admin/listings-queue"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Listings queue
+            </Link>
+            <Link
               href="/admin/internships"
               className="inline-flex h-10 items-center justify-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700 hover:bg-slate-100"
             >

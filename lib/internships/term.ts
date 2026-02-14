@@ -25,12 +25,7 @@ export function getMonthOptions() {
 }
 
 export function getStartYearOptions() {
-  const currentYear = new Date().getUTCFullYear()
-  const options: string[] = []
-  for (let year = currentYear; year <= currentYear + 5; year += 1) {
-    options.push(String(year))
-  }
-  return options
+  return ['2026', '2027']
 }
 
 export function getEndYearOptions() {

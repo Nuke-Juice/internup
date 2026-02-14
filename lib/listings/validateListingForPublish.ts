@@ -9,6 +9,12 @@ export const LISTING_PUBLISH_ERROR = {
   MAJORS_REQUIRED: 'MAJORS_REQUIRED',
   SHORT_SUMMARY_REQUIRED: 'SHORT_SUMMARY_REQUIRED',
   DESCRIPTION_REQUIRED: 'DESCRIPTION_REQUIRED',
+  SKILLS_REQUIRED: 'SKILLS_REQUIRED',
+  COURSE_CATEGORIES_REQUIRED: 'COURSE_CATEGORIES_REQUIRED',
+  YEAR_IN_SCHOOL_REQUIRED: 'YEAR_IN_SCHOOL_REQUIRED',
+  COURSEWORK_STRENGTH_REQUIRED: 'COURSEWORK_STRENGTH_REQUIRED',
+  REMOTE_ELIGIBILITY_REQUIRED: 'REMOTE_ELIGIBILITY_REQUIRED',
+  EXTERNAL_APPLY_URL_REQUIRED: 'EXTERNAL_APPLY_URL_REQUIRED',
 } as const
 
 export type ListingPublishErrorCode = (typeof LISTING_PUBLISH_ERROR)[keyof typeof LISTING_PUBLISH_ERROR]
@@ -28,6 +34,16 @@ export type ListingPublishValidationInput = {
   majors?: string[] | string | null
   shortSummary?: string | null
   description?: string | null
+  requiredSkillIds?: string[] | null
+  requiredCourseCategoryIds?: string[] | null
+  targetStudentYear?: string | null
+  targetStudentYears?: string[] | null
+  desiredCourseworkStrength?: string | null
+  remoteEligibleState?: string | null
+  remoteEligibilityScope?: string | null
+  remoteEligibleStates?: string[] | null
+  applyMode?: string | null
+  externalApplyUrl?: string | null
 }
 
 function normalizeText(value: string | null | undefined) {
@@ -80,6 +96,10 @@ export function validateListingForPublish(
   if (majors.length === 0) return { ok: false, code: LISTING_PUBLISH_ERROR.MAJORS_REQUIRED }
   if (!shortSummary) return { ok: false, code: LISTING_PUBLISH_ERROR.SHORT_SUMMARY_REQUIRED }
   if (!description) return { ok: false, code: LISTING_PUBLISH_ERROR.DESCRIPTION_REQUIRED }
+  const applyMode = normalizeText(input.applyMode).toLowerCase()
+  if ((applyMode === 'ats_link' || applyMode === 'hybrid') && !normalizeText(input.externalApplyUrl)) {
+    return { ok: false, code: LISTING_PUBLISH_ERROR.EXTERNAL_APPLY_URL_REQUIRED }
+  }
 
   return { ok: true }
 }

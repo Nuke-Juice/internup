@@ -16,10 +16,18 @@ export type Internship = {
   description: string | null
   short_summary: string | null
   remote_eligibility: string | null
+  remote_eligibility_scope?: string | null
+  remote_eligible_states?: string[] | null
   experience_level: string | null
+  target_student_year?: string | null
+  desired_coursework_strength?: string | null
+  pay_min?: number | null
+  pay_max?: number | null
   role_category: string | null
   category: string | null
   work_mode: 'remote' | 'hybrid' | 'on-site' | string | null
+  apply_mode?: 'native' | 'ats_link' | 'hybrid' | string | null
+  external_apply_url?: string | null
   term: string | null
   hours_min: number | null
   hours_max: number | null
@@ -103,12 +111,121 @@ export type Internship = {
   source: 'concierge' | 'employer_self' | 'partner' | string | null
 }
 
-const INTERNSHIP_SELECT =
-  'id, title, company_name, employer_id, employer_verification_tier, location, location_city, location_state, description, short_summary, remote_eligibility, experience_level, role_category, category, work_mode, term, hours_min, hours_max, required_skills, preferred_skills, recommended_coursework, target_graduation_years, internship_required_skill_items(skill_id, skill:skills(id, slug, label, category)), internship_preferred_skill_items(skill_id, skill:skills(id, slug, label, category)), internship_coursework_items(coursework_item_id, coursework:coursework_items(id, name, normalized_name)), internship_coursework_category_links(category_id, category:coursework_categories(id, name, normalized_name)), resume_required, application_deadline, apply_deadline, majors, hours_per_week, pay, created_at, is_active, source'
-const INTERNSHIP_SELECT_BASE =
-  'id, title, company_name, employer_id, employer_verification_tier, location, location_city, location_state, description, short_summary, remote_eligibility, experience_level, role_category, category, work_mode, term, hours_min, hours_max, required_skills, preferred_skills, recommended_coursework, target_graduation_years, resume_required, application_deadline, apply_deadline, majors, hours_per_week, pay, created_at, is_active, source'
-const INTERNSHIP_SELECT_LEGACY =
-  'id, title, company_name, employer_id, employer_verification_tier, location, location_city, location_state, description, experience_level, role_category, category, work_mode, term, hours_min, hours_max, required_skills, preferred_skills, recommended_coursework, target_graduation_years, resume_required, application_deadline, apply_deadline, majors, hours_per_week, pay, created_at, is_active, source'
+const INTERNSHIP_SELECT_RICH_COLUMNS = [
+  'id',
+  'title',
+  'company_name',
+  'employer_id',
+  'employer_verification_tier',
+  'location',
+  'location_city',
+  'location_state',
+  'description',
+  'short_summary',
+  'remote_eligibility',
+  'remote_eligibility_scope',
+  'remote_eligible_states',
+  'experience_level',
+  'target_student_year',
+  'desired_coursework_strength',
+  'role_category',
+  'category',
+  'work_mode',
+  'apply_mode',
+  'external_apply_url',
+  'term',
+  'hours_min',
+  'hours_max',
+  'required_skills',
+  'preferred_skills',
+  'recommended_coursework',
+  'target_graduation_years',
+  'internship_required_skill_items(skill_id, skill:skills(id, slug, label, category))',
+  'internship_preferred_skill_items(skill_id, skill:skills(id, slug, label, category))',
+  'internship_coursework_items(coursework_item_id, coursework:coursework_items(id, name, normalized_name))',
+  'internship_coursework_category_links(category_id, category:coursework_categories(id, name, normalized_name))',
+  'resume_required',
+  'application_deadline',
+  'apply_deadline',
+  'majors',
+  'hours_per_week',
+  'pay',
+  'pay_min',
+  'pay_max',
+  'created_at',
+  'is_active',
+  'source',
+] as const
+
+const INTERNSHIP_SELECT_BASE_COLUMNS = [
+  'id',
+  'title',
+  'company_name',
+  'employer_id',
+  'employer_verification_tier',
+  'location',
+  'location_city',
+  'location_state',
+  'description',
+  'short_summary',
+  'remote_eligibility',
+  'experience_level',
+  'role_category',
+  'category',
+  'work_mode',
+  'apply_mode',
+  'external_apply_url',
+  'term',
+  'hours_min',
+  'hours_max',
+  'required_skills',
+  'preferred_skills',
+  'recommended_coursework',
+  'target_graduation_years',
+  'resume_required',
+  'application_deadline',
+  'apply_deadline',
+  'majors',
+  'hours_per_week',
+  'pay',
+  'created_at',
+  'is_active',
+  'source',
+] as const
+
+const INTERNSHIP_SELECT_LEGACY_COLUMNS = [
+  'id',
+  'title',
+  'company_name',
+  'employer_id',
+  'employer_verification_tier',
+  'location',
+  'location_city',
+  'location_state',
+  'description',
+  'experience_level',
+  'role_category',
+  'category',
+  'work_mode',
+  'apply_mode',
+  'external_apply_url',
+  'term',
+  'hours_min',
+  'hours_max',
+  'required_skills',
+  'preferred_skills',
+  'recommended_coursework',
+  'target_graduation_years',
+  'resume_required',
+  'application_deadline',
+  'apply_deadline',
+  'majors',
+  'hours_per_week',
+  'pay',
+  'created_at',
+  'is_active',
+  'source',
+] as const
 
 type InternshipFilters = {
   searchQuery?: string
@@ -129,31 +246,45 @@ function escapeIlikeInput(value: string) {
   return value.replace(/[%_]/g, '').trim()
 }
 
-export async function fetchInternships(options?: FetchInternshipsOptions) {
-  const supabase = await supabaseServer()
-  const today = new Date().toISOString().slice(0, 10)
-  const rawLimit = Number(options?.limit ?? 60)
-  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 120) : 60
-  const rawPage = Number(options?.page ?? 1)
-  const page = Number.isFinite(rawPage) ? Math.max(Math.trunc(rawPage), 1) : 1
-  const start = (page - 1) * limit
-  const end = start + limit
-  const filters = options?.filters
+function isMissingColumnError(message: string | null | undefined) {
+  return (message ?? '').toLowerCase().includes('does not exist')
+}
 
+function extractMissingColumnName(message: string | null | undefined) {
+  if (!message) return null
+  const lower = message.toLowerCase()
+  const match = lower.match(/column\s+[\w."]*?([a-z_][a-z0-9_]*)\s+does not exist/)
+  if (!match) return null
+  return match[1] ?? null
+}
+
+type QueryContext = {
+  today: string
+  start: number
+  end: number
+  searchQuery: string
+  filters: InternshipFilters | undefined
+  locationCity: string
+}
+
+function buildInternshipsQuery(params: {
+  supabase: Awaited<ReturnType<typeof supabaseServer>>
+  columns: string[]
+  context: QueryContext
+}) {
+  const { supabase, columns, context } = params
+  const { today, start, end, searchQuery, filters, locationCity } = context
   let query = supabase
     .from('internships')
-    .select(INTERNSHIP_SELECT)
+    .select(columns.join(', '))
     .eq('is_active', true)
     .or(`application_deadline.is.null,application_deadline.gte.${today}`)
     .order('created_at', { ascending: false })
     .range(start, end)
 
-  const searchQuery = escapeIlikeInput(filters?.searchQuery ?? '')
   if (searchQuery.length >= 2) {
     const prefix = `${searchQuery}%`
-    query = query.or(
-      `title.ilike.${prefix},company_name.ilike.${prefix},category.ilike.${prefix},role_category.ilike.${prefix}`
-    )
+    query = query.or(`title.ilike.${prefix},company_name.ilike.${prefix},category.ilike.${prefix},role_category.ilike.${prefix}`)
   }
   if (filters?.category?.trim()) {
     const normalizedCategory = filters.category.trim()
@@ -168,93 +299,98 @@ export async function fetchInternships(options?: FetchInternshipsOptions) {
   if (filters?.locationState?.trim()) {
     query = query.eq('location_state', filters.locationState.trim())
   }
-  const locationCity = escapeIlikeInput(filters?.locationCity ?? '')
   if (locationCity.length >= 2) {
     query = query.ilike('location_city', `${locationCity}%`)
   }
+  return query
+}
 
-  const { data, error } = await query
+async function runSchemaTolerantInternshipQuery(params: {
+  supabase: Awaited<ReturnType<typeof supabaseServer>>
+  columns: readonly string[]
+  context: QueryContext
+  label: string
+}) {
+  const { supabase, context, label } = params
+  let selectedColumns = [...params.columns]
+  const minimumColumns = 12
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const { data, error } = await buildInternshipsQuery({
+      supabase,
+      columns: selectedColumns,
+      context,
+    })
+
+    if (!error) return { data }
+
+    const missingColumn = extractMissingColumnName(error.message)
+    if (missingColumn && selectedColumns.includes(missingColumn) && selectedColumns.length > minimumColumns) {
+      selectedColumns = selectedColumns.filter((column) => column !== missingColumn)
+      continue
+    }
+
+    if (!isMissingColumnError(error.message)) {
+      console.error(`[jobs] fetchInternships ${label} query failed`, error.message)
+    }
+    return { data: null, error }
+  }
+
+  return { data: null, error: { message: 'schema fallback exhausted' } }
+}
+
+export async function fetchInternships(options?: FetchInternshipsOptions) {
+  const supabase = await supabaseServer()
+  const today = new Date().toISOString().slice(0, 10)
+  const rawLimit = Number(options?.limit ?? 60)
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 1), 120) : 60
+  const rawPage = Number(options?.page ?? 1)
+  const page = Number.isFinite(rawPage) ? Math.max(Math.trunc(rawPage), 1) : 1
+  const start = (page - 1) * limit
+  const end = start + limit
+  const filters = options?.filters
+
+  const searchQuery = escapeIlikeInput(filters?.searchQuery ?? '')
+  const locationCity = escapeIlikeInput(filters?.locationCity ?? '')
+  const queryContext: QueryContext = {
+    today,
+    start,
+    end,
+    searchQuery,
+    filters,
+    locationCity,
+  }
+
+  const { data, error } = await runSchemaTolerantInternshipQuery({
+    supabase,
+    columns: INTERNSHIP_SELECT_RICH_COLUMNS,
+    context: queryContext,
+    label: 'rich',
+  })
   let rows =
     (data ?? []) as unknown as Array<
       Omit<Internship, 'required_skill_ids' | 'preferred_skill_ids' | 'coursework_item_ids' | 'coursework_category_ids' | 'coursework_category_names'>
     >
 
   if (error) {
-    console.error('[jobs] fetchInternships rich query failed; retrying with base fields', error.message)
-    let fallbackQuery = supabase
-      .from('internships')
-      .select(INTERNSHIP_SELECT_BASE)
-      .eq('is_active', true)
-      .or(`application_deadline.is.null,application_deadline.gte.${today}`)
-      .order('created_at', { ascending: false })
-      .range(start, end)
-
-    if (searchQuery.length >= 2) {
-      const prefix = `${searchQuery}%`
-      fallbackQuery = fallbackQuery.or(
-        `title.ilike.${prefix},company_name.ilike.${prefix},category.ilike.${prefix},role_category.ilike.${prefix}`
-      )
-    }
-    if (filters?.category?.trim()) {
-      const normalizedCategory = filters.category.trim()
-      fallbackQuery = fallbackQuery.or(`category.eq.${normalizedCategory},role_category.eq.${normalizedCategory}`)
-    }
-    if (filters?.remoteOnly) {
-      fallbackQuery = fallbackQuery.eq('work_mode', 'remote')
-    }
-    if (filters?.experience?.trim()) {
-      fallbackQuery = fallbackQuery.eq('experience_level', filters.experience.trim())
-    }
-    if (filters?.locationState?.trim()) {
-      fallbackQuery = fallbackQuery.eq('location_state', filters.locationState.trim())
-    }
-    if (locationCity.length >= 2) {
-      fallbackQuery = fallbackQuery.ilike('location_city', `${locationCity}%`)
-    }
-
-    const { data: fallbackData, error: fallbackError } = await fallbackQuery
+    const { data: fallbackData, error: fallbackError } = await runSchemaTolerantInternshipQuery({
+      supabase,
+      columns: INTERNSHIP_SELECT_BASE_COLUMNS,
+      context: queryContext,
+      label: 'base',
+    })
     if (fallbackError) {
-      console.error('[jobs] fetchInternships base query failed', fallbackError.message)
-
-      const missingColumn = fallbackError.message.toLowerCase().includes('does not exist')
-      if (!missingColumn) {
+      if (!isMissingColumnError(fallbackError.message)) {
         return { rows: [], hasMore: false }
       }
 
-      let legacyQuery = supabase
-        .from('internships')
-        .select(INTERNSHIP_SELECT_LEGACY)
-        .eq('is_active', true)
-        .or(`application_deadline.is.null,application_deadline.gte.${today}`)
-        .order('created_at', { ascending: false })
-        .range(start, end)
-
-      if (searchQuery.length >= 2) {
-        const prefix = `${searchQuery}%`
-        legacyQuery = legacyQuery.or(
-          `title.ilike.${prefix},company_name.ilike.${prefix},category.ilike.${prefix},role_category.ilike.${prefix}`
-        )
-      }
-      if (filters?.category?.trim()) {
-        const normalizedCategory = filters.category.trim()
-        legacyQuery = legacyQuery.or(`category.eq.${normalizedCategory},role_category.eq.${normalizedCategory}`)
-      }
-      if (filters?.remoteOnly) {
-        legacyQuery = legacyQuery.eq('work_mode', 'remote')
-      }
-      if (filters?.experience?.trim()) {
-        legacyQuery = legacyQuery.eq('experience_level', filters.experience.trim())
-      }
-      if (filters?.locationState?.trim()) {
-        legacyQuery = legacyQuery.eq('location_state', filters.locationState.trim())
-      }
-      if (locationCity.length >= 2) {
-        legacyQuery = legacyQuery.ilike('location_city', `${locationCity}%`)
-      }
-
-      const { data: legacyData, error: legacyError } = await legacyQuery
+      const { data: legacyData, error: legacyError } = await runSchemaTolerantInternshipQuery({
+        supabase,
+        columns: INTERNSHIP_SELECT_LEGACY_COLUMNS,
+        context: queryContext,
+        label: 'legacy',
+      })
       if (legacyError) {
-        console.error('[jobs] fetchInternships legacy query failed', legacyError.message)
         return { rows: [], hasMore: false }
       }
 

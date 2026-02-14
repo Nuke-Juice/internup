@@ -22,6 +22,8 @@ type Props = {
   options: CatalogOption[]
   initialLabels: string[]
   helperText?: string
+  allowCustom?: boolean
+  required?: boolean
 }
 
 function sameToken(left: string, right: string) {
@@ -37,6 +39,8 @@ export default function CatalogMultiSelect({
   options,
   initialLabels,
   helperText,
+  allowCustom = true,
+  required = false,
 }: Props) {
   const optionsByToken = useMemo(() => {
     const map = new Map<string, CatalogOption>()
@@ -151,11 +155,13 @@ export default function CatalogMultiSelect({
                     return
                   }
                 }
-                addFromText(query)
+                if (allowCustom) {
+                  addFromText(query)
+                }
               }
             }}
             className="min-w-[12rem] flex-1 border-0 bg-transparent p-0 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
-            placeholder="Type to search, Enter to add"
+            placeholder={allowCustom ? 'Type to search, Enter to add' : 'Type to search skills'}
           />
         </div>
         {showMenu && filteredOptions.length > 0 ? (
@@ -179,9 +185,8 @@ export default function CatalogMultiSelect({
       <input type="hidden" name={fieldName} value={selected.map((item) => item.label).join(', ')} />
       <input type="hidden" name={idsFieldName} value={JSON.stringify(canonicalIds)} />
       <input type="hidden" name={customFieldName} value={JSON.stringify(customLabels)} />
-      <p className="mt-1 text-xs text-slate-500">
-        {helperText ?? 'Blue chips are canonical matches. Amber chips are custom text and will be normalized when possible.'}
-      </p>
+      {required ? <input type="hidden" name={`${idsFieldName}_required`} value={canonicalIds.length > 0 ? '1' : ''} /> : null}
+      {helperText ? <p className="mt-1 text-xs text-slate-500">{helperText}</p> : null}
     </div>
   )
 }

@@ -41,6 +41,7 @@ type EmployerInternshipRow = {
   term: string | null
   work_mode: string | null
   experience_level: string | null
+  target_student_year: string | null
   description: string | null
   employer_verification_tier: string | null
   created_at: string | null
@@ -68,6 +69,17 @@ function formatFoundedDate(value: string | null) {
   return String(parsed.getUTCFullYear())
 }
 
+function formatTargetYear(value: string | null | undefined) {
+  const normalized = (value ?? '').trim().toLowerCase()
+  if (!normalized) return null
+  if (normalized === 'any') return 'Any year'
+  if (normalized === 'freshman') return 'Freshman'
+  if (normalized === 'sophomore') return 'Sophomore'
+  if (normalized === 'junior') return 'Junior'
+  if (normalized === 'senior') return 'Senior'
+  return value
+}
+
 function snippet(value: string | null) {
   if (!value) return null
   const trimmed = value.trim()
@@ -82,7 +94,7 @@ export default async function PublicEmployerProfilePage({ params }: { params: Pa
   const [{ data }, { data: publicProfile }, { data: privateProfile }] = await Promise.all([
     supabase
       .from('internships')
-      .select('id, title, company_name, location, term, work_mode, experience_level, description, employer_verification_tier, created_at')
+      .select('id, title, company_name, location, term, work_mode, experience_level, target_student_year, description, employer_verification_tier, created_at')
       .eq('employer_id', employerId)
       .eq('is_active', true)
       .order('created_at', { ascending: false })
@@ -233,8 +245,8 @@ export default async function PublicEmployerProfilePage({ params }: { params: Pa
                   {listing.work_mode ? (
                     <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">{listing.work_mode}</span>
                   ) : null}
-                  {listing.experience_level ? (
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">{listing.experience_level}</span>
+                  {formatTargetYear(listing.target_student_year ?? listing.experience_level) ? (
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">{formatTargetYear(listing.target_student_year ?? listing.experience_level)}</span>
                   ) : null}
                 </div>
                 {snippet(listing.description) ? (

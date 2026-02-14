@@ -5,7 +5,7 @@ import {
   startProEmployerCheckoutAction,
   startStarterEmployerCheckoutAction,
 } from '@/lib/billing/actions'
-import { EMPLOYER_PLANS, getRemainingCapacity, isUnlimitedInternships, type EmployerPlanId } from '@/lib/billing/plan'
+import { EMPLOYER_PLANS, getRemainingCapacity, type EmployerPlanId } from '@/lib/billing/plan'
 import { getEmployerVerificationStatus } from '@/lib/billing/subscriptions'
 import { supabaseServer } from '@/lib/supabase/server'
 
@@ -183,7 +183,7 @@ export default async function UpgradePage({
                   ))}
                 </ul>
 
-                <div className="mt-6 pt-1">
+                <div className="mt-auto pt-6">
                   {candidatePlanId === 'free' ? (
                     <button
                       type="button"

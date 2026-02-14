@@ -20,32 +20,22 @@ import {
 } from '@/lib/listings/validateListingForPublish'
 import {
   deriveTermFromRange,
-  getEndYearOptions,
-  getMonthOptions,
-  getStartYearOptions,
-  inferRangeFromTerm,
 } from '@/lib/internships/term'
 import { isVerifiedCityForState, normalizeStateCode } from '@/lib/locations/usLocationCatalog'
 import { supabaseServer } from '@/lib/supabase/server'
 import { guardEmployerInternshipPublish } from '@/lib/auth/verifiedActionGate'
-import InternshipLocationFields from '@/components/forms/InternshipLocationFields'
-import TurnstileWidget from '@/components/security/TurnstileWidget'
-import { verifyTurnstileToken } from '@/lib/security/turnstile'
-import { normalizeSkills } from '@/lib/skills/normalizeSkills'
 import { sanitizeSkillLabels } from '@/lib/skills/sanitizeSkillLabels'
-import CatalogMultiSelect from '@/components/forms/CatalogMultiSelect'
+import { verifyTurnstileToken } from '@/lib/security/turnstile'
+import BackWithFallbackButton from '@/components/navigation/BackWithFallbackButton'
+import { INTERNSHIP_CATEGORIES } from '@/lib/internships/categories'
+import { TARGET_STUDENT_YEAR_LABELS, TARGET_STUDENT_YEAR_OPTIONS } from '@/lib/internships/years'
+import { inferExternalApplyType, normalizeApplyMode, normalizeExternalApplyUrl } from '@/lib/apply/externalApply'
+import { trackAnalyticsEvent } from '@/lib/analytics'
+import ListingWizard from '@/components/employer/listing/ListingWizard'
 
 function isLaunchConciergeEnabled() {
   const raw = (process.env.LAUNCH_CONCIERGE_ENABLED ?? '').trim().toLowerCase()
   return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on'
-}
-
-function normalizeList(value: string) {
-  return value
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .join(', ')
 }
 
 function parseCommaList(value: string) {
@@ -53,6 +43,32 @@ function parseCommaList(value: string) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function parseList(value: string) {
+  return value
+    .split('\n')
+    .map((item) => item.trim())
+    .flatMap((item) => item.split(','))
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function parseTargetStudentYears(value: FormDataEntryValue | null) {
+  const parsed = parseJsonStringArray(value)
+    .map((item) => item.toLowerCase())
+    .filter((item) => TARGET_STUDENT_YEAR_OPTIONS.includes(item as (typeof TARGET_STUDENT_YEAR_OPTIONS)[number]))
+  return Array.from(new Set(parsed))
+}
+
+function formatTargetStudentYears(value: unknown) {
+  const years = Array.isArray(value)
+    ? value.map((item) => String(item).trim().toLowerCase()).filter((item) => item in TARGET_STUDENT_YEAR_LABELS)
+    : []
+  if (years.length === 0) return 'All years'
+  return years
+    .map((year) => TARGET_STUDENT_YEAR_LABELS[year as keyof typeof TARGET_STUDENT_YEAR_LABELS])
+    .join(', ')
 }
 
 function parseJsonStringArray(value: FormDataEntryValue | null): string[] {
@@ -93,6 +109,21 @@ function getCreateInternshipError(searchParams?: { code?: string; error?: string
   if (code === INTERNSHIP_VALIDATION_ERROR.REQUIRED_SKILLS_MISSING) {
     return { message: 'Add at least one required skill.', field: 'required_skills' as const }
   }
+  if (code === INTERNSHIP_VALIDATION_ERROR.REQUIRED_COURSE_CATEGORIES_MISSING) {
+    return { message: 'Add at least one required coursework category.', field: 'required_course_categories' as const }
+  }
+  if (code === INTERNSHIP_VALIDATION_ERROR.TARGET_STUDENT_YEAR_REQUIRED) {
+    return { message: 'Select the target year in school.', field: 'target_student_year' as const }
+  }
+  if (code === INTERNSHIP_VALIDATION_ERROR.COURSEWORK_STRENGTH_REQUIRED) {
+    return { message: 'Select desired coursework strength.', field: 'desired_coursework_strength' as const }
+  }
+  if (code === INTERNSHIP_VALIDATION_ERROR.INVALID_PAY_RANGE) {
+    return { message: 'Pay range is invalid. Use min >= 0 and max >= min.', field: 'pay' as const }
+  }
+  if (code === INTERNSHIP_VALIDATION_ERROR.REMOTE_ELIGIBILITY_REQUIRED) {
+    return { message: 'Remote eligibility state is required for remote/hybrid roles.', field: 'remote_eligibility' as const }
+  }
   if (code === INTERNSHIP_VALIDATION_ERROR.DEADLINE_INVALID) {
     return { message: 'Application deadline must be today or later.', field: 'application_deadline' as const }
   }
@@ -122,6 +153,24 @@ function getCreateInternshipError(searchParams?: { code?: string; error?: string
   }
   if (code === LISTING_PUBLISH_ERROR.DESCRIPTION_REQUIRED) {
     return { message: 'Description is required for publish.', field: 'description' as const }
+  }
+  if (code === LISTING_PUBLISH_ERROR.SKILLS_REQUIRED) {
+    return { message: 'At least one canonical skill is required for publish.', field: 'required_skills' as const }
+  }
+  if (code === LISTING_PUBLISH_ERROR.COURSE_CATEGORIES_REQUIRED) {
+    return { message: 'At least one required coursework category is required for publish.', field: 'required_course_categories' as const }
+  }
+  if (code === LISTING_PUBLISH_ERROR.YEAR_IN_SCHOOL_REQUIRED) {
+    return { message: 'Year in school is required for publish.', field: 'target_student_year' as const }
+  }
+  if (code === LISTING_PUBLISH_ERROR.COURSEWORK_STRENGTH_REQUIRED) {
+    return { message: 'Coursework strength is required for publish.', field: 'desired_coursework_strength' as const }
+  }
+  if (code === LISTING_PUBLISH_ERROR.REMOTE_ELIGIBILITY_REQUIRED) {
+    return { message: 'Remote eligibility state is required for remote/hybrid listings.', field: 'remote_eligibility' as const }
+  }
+  if (code === LISTING_PUBLISH_ERROR.EXTERNAL_APPLY_URL_REQUIRED) {
+    return { message: 'A valid https ATS application URL is required for ATS-link or hybrid apply mode.', field: null }
   }
   if (code === PLAN_LIMIT_REACHED) {
     const limit = Number.parseInt(String(searchParams?.limit ?? ''), 10)
@@ -165,14 +214,11 @@ export default async function EmployerDashboardPage({
   }
   const resolvedSearchParams = searchParams ? await searchParams : undefined
   const supabase = await supabaseServer()
-  const monthOptions = getMonthOptions()
-  const startYearOptions = getStartYearOptions()
-  const endYearOptions = getEndYearOptions()
   const launchConciergeEnabled = isLaunchConciergeEnabled()
 
   const { data: employerProfile } = await supabase
     .from('employer_profiles')
-    .select('company_name, location_address_line1')
+    .select('company_name, location_address_line1, location_state')
     .eq('user_id', user.id)
     .single()
 
@@ -181,10 +227,24 @@ export default async function EmployerDashboardPage({
   }
 
   const { data: internships } = createOnly
-    ? { data: [] as Array<{ id: string; title: string; location: string; experience_level: string; majors: unknown; created_at: string; is_active: boolean; work_mode: string }> }
+    ? {
+        data: [] as Array<{
+          id: string
+          title: string
+          location: string
+          target_student_years: string[] | null
+          target_student_year: string | null
+          majors: unknown
+          created_at: string
+          updated_at: string | null
+          is_active: boolean
+          status: 'draft' | 'published' | 'archived' | string | null
+          work_mode: string
+        }>,
+      }
     : await supabase
         .from('internships')
-        .select('id, title, location, experience_level, majors, created_at, is_active, work_mode')
+        .select('id, title, location, target_student_year, target_student_years, majors, created_at, updated_at, is_active, status, work_mode')
         .eq('employer_id', user.id)
         .order('created_at', { ascending: false })
   const editingInternshipId = String(resolvedSearchParams?.edit ?? '').trim()
@@ -192,7 +252,7 @@ export default async function EmployerDashboardPage({
     ? await supabase
         .from('internships')
         .select(
-          'id, employer_id, title, company_name, category, role_category, location_city, location_state, location, work_mode, remote_eligibility, term, hours_min, hours_max, pay, majors, required_skills, application_deadline, apply_deadline, short_summary, description, experience_level, is_active, internship_required_skill_items(skill_id, skill:skills(label))'
+          'id, employer_id, title, company_name, category, role_category, location_city, location_state, location, work_mode, remote_eligibility_scope, remote_eligible_states, remote_eligible_state, remote_eligible_region, apply_mode, external_apply_url, external_apply_type, term, hours_min, hours_max, pay, pay_min, pay_max, majors, required_skills, preferred_skills, responsibilities, qualifications, resume_required, application_deadline, apply_deadline, short_summary, description, target_student_year, target_student_years, desired_coursework_strength, is_active, status, internship_required_skill_items(skill_id, skill:skills(label)), internship_required_course_categories(category_id, category:canonical_course_categories(name, slug)), internship_major_links(major_id, major:canonical_majors(name))'
         )
         .eq('id', editingInternshipId)
         .eq('employer_id', user.id)
@@ -221,7 +281,48 @@ export default async function EmployerDashboardPage({
       ? editingCanonicalRequiredSkillLabels
       : Array.isArray(editingInternship?.required_skills)
         ? editingInternship.required_skills
-        : []
+      : []
+  const { data: canonicalCourseCategoryRows } = await supabase
+    .from('canonical_course_categories')
+    .select('id, name')
+    .order('name', { ascending: true })
+    .limit(500)
+  const courseCategoryCatalog = (canonicalCourseCategoryRows ?? [])
+    .map((row) => ({
+      id: typeof row.id === 'string' ? row.id : '',
+      name: typeof row.name === 'string' ? row.name.trim() : '',
+    }))
+    .filter((row) => row.id && row.name)
+  const initialRequiredCourseCategoryLabels = (editingInternship?.internship_required_course_categories ?? [])
+    .map((row) => {
+      const category = row.category as { name?: string | null } | null
+      return typeof category?.name === 'string' ? category.name.trim() : ''
+    })
+    .filter(Boolean)
+  const { data: canonicalMajorRows } = await supabase
+    .from('canonical_majors')
+    .select('id, name')
+    .order('name', { ascending: true })
+    .limit(600)
+  const canonicalMajorCatalog = (canonicalMajorRows ?? [])
+    .map((row) => ({
+      id: typeof row.id === 'string' ? row.id : '',
+      name: typeof row.name === 'string' ? row.name.trim() : '',
+    }))
+    .filter((row) => row.id && row.name)
+  const majorNamesById = new Map(canonicalMajorCatalog.map((major) => [major.id, major.name]))
+  const initialMajorLabelsFromLinks = (editingInternship?.internship_major_links ?? [])
+    .map((row) => {
+      const major = row.major as { name?: string | null } | null
+      return typeof major?.name === 'string' ? major.name.trim() : ''
+    })
+    .filter(Boolean)
+  const initialMajorLabels =
+    initialMajorLabelsFromLinks.length > 0
+      ? initialMajorLabelsFromLinks
+      : Array.isArray(editingInternship?.majors)
+        ? editingInternship.majors
+        : parseCommaList(formatMajors(editingInternship?.majors ?? ''))
   const { plan } = await getEmployerVerificationStatus({ supabase, userId: user.id })
   const { data: conciergeRequests } = launchConciergeEnabled && !createOnly
     ? await supabase
@@ -231,7 +332,7 @@ export default async function EmployerDashboardPage({
         .order('created_at', { ascending: false })
         .limit(5)
     : { data: [] as Array<{ id: string; role_title: string | null; status: string | null; created_at: string | null }> }
-  const activeInternshipsCount = (internships ?? []).filter((internship) => internship.is_active).length
+  const activeInternshipsCount = (internships ?? []).filter((internship) => internship.status === 'published' || internship.is_active).length
 
   async function createInternship(formData: FormData) {
     'use server'
@@ -248,11 +349,11 @@ export default async function EmployerDashboardPage({
       internshipId.length > 0
         ? await supabaseAction
             .from('internships')
-            .select('id, is_active')
+            .select('id, is_active, status')
             .eq('id', internshipId)
             .eq('employer_id', currentUser.id)
             .maybeSingle()
-        : { data: null as { id: string; is_active: boolean | null } | null }
+        : { data: null as { id: string; is_active: boolean | null; status: string | null } | null }
 
     if (internshipId.length > 0 && !existingListing.data?.id) {
       redirect('/dashboard/employer?error=Listing+not+found')
@@ -263,27 +364,31 @@ export default async function EmployerDashboardPage({
       if (!verificationGate.ok) {
         redirect(verificationGate.redirectTo)
       }
-
-      const requiresTurnstile = verification.plan.id === 'free'
-      if (requiresTurnstile) {
+      if (!verification.isVerifiedEmployer) {
         const token = String(formData.get('turnstile_token') ?? '').trim()
         const requestHeaders = await headers()
         const forwardedFor = requestHeaders.get('x-forwarded-for')
         const remoteIp = forwardedFor ? forwardedFor.split(',')[0]?.trim() || null : null
-
         const turnstile = await verifyTurnstileToken({
           token,
           expectedAction: 'create_internship',
           remoteIp,
         })
-
         if (!turnstile.ok) {
-          console.debug('[turnstile] internship create verification failed', {
-            userId: currentUser.id,
-            remoteIp,
-            errorCodes: turnstile.errorCodes,
-          })
-          redirect('/dashboard/employer?error=Please+verify+you%E2%80%99re+human+and+try+again.')
+          redirect('/dashboard/employer?error=Please+complete+the+human+verification+and+try+again.')
+        }
+      }
+      if (!verification.isVerifiedEmployer) {
+        const cutoff = new Date()
+        cutoff.setMinutes(cutoff.getMinutes() - 10)
+        const tenMinutesAgo = cutoff.toISOString()
+        const { count: recentCreateCount } = await supabaseAction
+          .from('internships')
+          .select('id', { count: 'exact', head: true })
+          .eq('employer_id', currentUser.id)
+          .gte('created_at', tenMinutesAgo)
+        if ((recentCreateCount ?? 0) > 6) {
+          redirect('/dashboard/employer?error=Publishing+rate+limit+reached.+Please+try+again+in+a+few+minutes.')
         }
       }
 
@@ -291,11 +396,11 @@ export default async function EmployerDashboardPage({
         .from('internships')
         .select('id', { count: 'exact', head: true })
         .eq('employer_id', currentUser.id)
-        .eq('is_active', true)
+        .eq('status', 'published')
 
       const currentActive = count ?? 0
       const limit = verification.plan.maxActiveInternships
-      const shouldCheckLimit = internshipId.length === 0 || !existingListing.data?.is_active
+      const shouldCheckLimit = internshipId.length === 0 || (existingListing.data?.status !== 'published' && !existingListing.data?.is_active)
       if (shouldCheckLimit && limit !== null && currentActive >= limit) {
         redirect(`/dashboard/employer?code=${PLAN_LIMIT_REACHED}&limit=${limit}&current=${currentActive}`)
       }
@@ -307,7 +412,24 @@ export default async function EmployerDashboardPage({
     const locationCity = String(formData.get('location_city') ?? '').trim()
     const locationState = normalizeStateCode(String(formData.get('location_state') ?? ''))
     const workMode = String(formData.get('work_mode') ?? '').trim().toLowerCase()
-    const remoteEligibility = String(formData.get('remote_eligibility') ?? '').trim()
+    const remoteEligibleRegionInput = String(formData.get('remote_eligible_region') ?? '').trim().toLowerCase()
+    const remoteEligibleRegion = remoteEligibleRegionInput === 'us-wide' ? 'us-wide' : remoteEligibleRegionInput === 'state' ? 'state' : null
+    const remoteEligibleStateInput = normalizeStateCode(String(formData.get('remote_eligible_state') ?? ''))
+    const remoteEligibleState = remoteEligibleRegion === 'state' ? (remoteEligibleStateInput || employerBaseState || locationState) : null
+    const remoteEligibilityScope =
+      workMode === 'remote' || workMode === 'hybrid'
+        ? remoteEligibleRegion === 'us-wide'
+          ? 'worldwide'
+          : 'us_states'
+        : null
+    const remoteEligibleStates =
+      workMode === 'remote' || workMode === 'hybrid'
+        ? remoteEligibleRegion === 'us-wide'
+          ? []
+          : remoteEligibleState
+            ? [remoteEligibleState]
+            : []
+        : []
     const startMonth = String(formData.get('start_month') ?? '').trim()
     const startYear = String(formData.get('start_year') ?? '').trim()
     const endMonth = String(formData.get('end_month') ?? '').trim()
@@ -317,28 +439,60 @@ export default async function EmployerDashboardPage({
     const hoursMax = Number(String(formData.get('hours_max') ?? '').trim())
     const requiredSkillsRaw = String(formData.get('required_skills') ?? '').trim()
     const selectedRequiredSkillIds = Array.from(new Set(parseJsonStringArray(formData.get('required_skill_ids'))))
-    const customRequiredSkills = parseJsonStringArray(formData.get('required_skill_custom'))
+    const preferredSkillsRaw = String(formData.get('preferred_skills') ?? '').trim()
+    const selectedPreferredSkillIds = Array.from(new Set(parseJsonStringArray(formData.get('preferred_skill_ids'))))
+    const selectedRequiredCourseCategoryIds = Array.from(new Set(parseJsonStringArray(formData.get('required_course_category_ids'))))
     const requiredSkillIdsRaw = selectedRequiredSkillIds.join(',')
+    const requiredCourseCategoryIdsRaw = selectedRequiredCourseCategoryIds.join(',')
     const applicationDeadline = String(formData.get('application_deadline') ?? '').trim()
+    const applyMode = normalizeApplyMode(String(formData.get('apply_mode') ?? 'native'))
+    const externalApplyUrlInput = String(formData.get('external_apply_url') ?? '').trim()
+    const externalApplyUrl = normalizeExternalApplyUrl(externalApplyUrlInput)
+    const externalApplyTypeInput = String(formData.get('external_apply_type') ?? '').trim().toLowerCase()
+    const externalApplyType = externalApplyTypeInput || (externalApplyUrl ? inferExternalApplyType(externalApplyUrl) : null)
+    const requiresExternalApply = applyMode === 'ats_link' || applyMode === 'hybrid'
+    const resolvedExternalApplyUrl = requiresExternalApply ? externalApplyUrl : null
+    const resolvedExternalApplyType = requiresExternalApply ? externalApplyType : null
+    if (requiresExternalApply && !externalApplyUrl) {
+      const nextBase = internshipId ? `/dashboard/employer?create=1&edit=${encodeURIComponent(internshipId)}` : '/dashboard/employer?create=1'
+      redirect(`${nextBase}&error=Valid+https+ATS+application+URL+is+required+for+ATS+or+hybrid+apply+mode`)
+    }
     const shortSummary = String(formData.get('short_summary') ?? '').trim()
     const description = String(formData.get('description') ?? '').trim()
-    const pay = String(formData.get('pay') ?? '').trim()
-    const experienceLevel = String(formData.get('experience_level') ?? '').trim()
+    const responsibilities = parseList(String(formData.get('responsibilities') ?? '').trim())
+    const qualifications = parseList(String(formData.get('qualifications') ?? '').trim())
+    const payMin = Number(String(formData.get('pay_min') ?? '').trim())
+    const payMax = Number(String(formData.get('pay_max') ?? '').trim())
+    const pay = Number.isFinite(payMin) && Number.isFinite(payMax) ? `$${payMin}-$${payMax}/hr` : ''
+    const resumeRequired = String(formData.get('resume_required') ?? '1').trim() !== '0'
+    const targetStudentYears = parseTargetStudentYears(formData.get('target_student_years'))
+    const targetStudentYear =
+      targetStudentYears.length === TARGET_STUDENT_YEAR_OPTIONS.length
+        ? 'any'
+        : targetStudentYears[0] ?? String(formData.get('target_student_year') ?? '').trim().toLowerCase()
+    const desiredCourseworkStrength = String(formData.get('desired_coursework_strength') ?? '').trim().toLowerCase()
     const majorsRaw = String(formData.get('majors') ?? '').trim()
+    const selectedMajorIds = Array.from(new Set(parseJsonStringArray(formData.get('major_ids'))))
+    const selectedMajorNames = selectedMajorIds.map((id) => majorNamesById.get(id)).filter((value): value is string => Boolean(value))
+    const resolvedMajors = selectedMajorNames.length > 0 ? selectedMajorNames : parseCommaList(majorsRaw)
     const normalizedRequiredSkills = sanitizeSkillLabels(parseCommaList(requiredSkillsRaw)).valid
     const resolvedRequiredSkillLabels = new Set(normalizedRequiredSkills)
     for (const id of selectedRequiredSkillIds) {
       const label = skillLabelsById.get(id)
       if (label) resolvedRequiredSkillLabels.add(label)
     }
-    const { skillIds: normalizedCustomSkillIds, unknown: unresolvedCustomSkills } = await normalizeSkills(customRequiredSkills)
-    const canonicalRequiredSkillIds = Array.from(new Set([...selectedRequiredSkillIds, ...normalizedCustomSkillIds]))
-    for (const id of normalizedCustomSkillIds) {
+    const normalizedPreferredSkills = sanitizeSkillLabels(parseCommaList(preferredSkillsRaw)).valid
+    const resolvedPreferredSkillLabels = new Set(normalizedPreferredSkills)
+    for (const id of selectedPreferredSkillIds) {
       const label = skillLabelsById.get(id)
-      if (label) resolvedRequiredSkillLabels.add(label)
+      if (label) resolvedPreferredSkillLabels.add(label)
     }
-    for (const skill of unresolvedCustomSkills) {
-      resolvedRequiredSkillLabels.add(skill)
+    const canonicalRequiredSkillIds = Array.from(new Set([...selectedRequiredSkillIds]))
+    const canonicalPreferredSkillIds = Array.from(new Set([...selectedPreferredSkillIds]))
+
+    if (isPublishing && (responsibilities.length === 0 || qualifications.length === 0)) {
+      const nextBase = internshipId ? `/dashboard/employer?create=1&edit=${encodeURIComponent(internshipId)}` : '/dashboard/employer?create=1'
+      redirect(`${nextBase}&error=Responsibilities+and+qualifications+are+required+for+publish`)
     }
 
     if (isPublishing) {
@@ -348,13 +502,24 @@ export default async function EmployerDashboardPage({
         workMode,
         locationCity: locationCity || null,
         locationState: locationState || null,
-        payText: pay || null,
+        payMinHourly: Number.isFinite(payMin) ? payMin : null,
+        payMaxHourly: Number.isFinite(payMax) ? payMax : null,
         hoursMin: Number.isFinite(hoursMin) ? hoursMin : null,
         hoursMax: Number.isFinite(hoursMax) ? hoursMax : null,
         term,
-        majors: majorsRaw,
+        majors: resolvedMajors,
         shortSummary,
         description,
+        requiredSkillIds: canonicalRequiredSkillIds,
+        requiredCourseCategoryIds: selectedRequiredCourseCategoryIds,
+        targetStudentYear,
+        targetStudentYears,
+        desiredCourseworkStrength,
+        remoteEligibilityScope: remoteEligibilityScope ?? null,
+        remoteEligibleStates,
+        remoteEligibleState: remoteEligibleState || null,
+        applyMode,
+        externalApplyUrl: resolvedExternalApplyUrl,
       })
       if (!publishValidation.ok) {
         const nextBase = internshipId ? `/dashboard/employer?create=1&edit=${encodeURIComponent(internshipId)}` : '/dashboard/employer?create=1'
@@ -372,6 +537,14 @@ export default async function EmployerDashboardPage({
         location_state: locationState || null,
         required_skills: requiredSkillsRaw,
         required_skill_ids: requiredSkillIdsRaw,
+        required_course_category_ids: requiredCourseCategoryIdsRaw,
+        target_student_year: targetStudentYear || null,
+        target_student_years: targetStudentYears,
+        desired_coursework_strength: desiredCourseworkStrength || null,
+        pay_min: Number.isFinite(payMin) ? payMin : null,
+        pay_max: Number.isFinite(payMax) ? payMax : null,
+        remote_eligibility_scope: remoteEligibilityScope,
+        remote_eligible_states: remoteEligibleStates,
         application_deadline: applicationDeadline || null,
       })
 
@@ -387,8 +560,8 @@ export default async function EmployerDashboardPage({
 
     const normalizedLocation =
       workMode === 'remote'
-        ? remoteEligibility
-          ? `Remote (${remoteEligibility})`
+        ? remoteEligibleState
+          ? `Remote (${remoteEligibleState})`
           : 'Remote'
         : `${locationCity.trim()}, ${locationState.trim()} (${workMode})`
 
@@ -401,24 +574,41 @@ export default async function EmployerDashboardPage({
       location: normalizedLocation,
       location_city: locationCity || null,
       location_state: locationState || null,
-      remote_eligibility: remoteEligibility || null,
+      remote_eligibility: remoteEligibleState || null,
+      remote_eligibility_scope: remoteEligibilityScope,
+      remote_eligible_state: remoteEligibleState || null,
+      remote_eligible_region: remoteEligibleRegion,
+      remote_eligible_states: remoteEligibleStates,
       description,
+      responsibilities: responsibilities.length > 0 ? responsibilities : null,
+      qualifications: qualifications.length > 0 ? qualifications : null,
       short_summary: shortSummary || null,
-      experience_level: experienceLevel,
+      target_student_year: targetStudentYear || null,
+      target_student_years: targetStudentYears,
+      desired_coursework_strength: desiredCourseworkStrength || null,
+      experience_level: targetStudentYear || null,
       work_mode: workMode,
+      apply_mode: applyMode,
+      external_apply_url: resolvedExternalApplyUrl,
+      external_apply_type: resolvedExternalApplyType,
       location_type: workMode,
       term,
       hours_min: hoursMin,
       hours_max: hoursMax,
       hours_per_week: hoursMax,
+      pay_min: Number.isFinite(payMin) ? payMin : null,
+      pay_max: Number.isFinite(payMax) ? payMax : null,
       is_active: isPublishing,
+      status: isPublishing ? 'published' : 'draft',
       source: 'employer_self' as const,
       employer_verification_tier: verification.isVerifiedEmployer ? 'pro' : 'free',
       pay,
       required_skills: resolvedRequiredSkillLabels.size > 0 ? Array.from(resolvedRequiredSkillLabels) : null,
+      preferred_skills: resolvedPreferredSkillLabels.size > 0 ? Array.from(resolvedPreferredSkillLabels) : null,
+      resume_required: resumeRequired,
       application_deadline: applicationDeadline || null,
       apply_deadline: applicationDeadline || null,
-      majors: majorsRaw ? normalizeList(majorsRaw) : null,
+      majors: resolvedMajors.length > 0 ? resolvedMajors : null,
     }
 
     const { data: insertedInternship, error } =
@@ -452,12 +642,206 @@ export default async function EmployerDashboardPage({
           redirect(`/dashboard/employer?error=${encodeURIComponent(requiredSkillLinkError.message)}`)
         }
       }
+
+      const { error: clearPreferredSkillsError } = await supabaseAction
+        .from('internship_preferred_skill_items')
+        .delete()
+        .eq('internship_id', persistedInternshipId)
+      if (clearPreferredSkillsError) {
+        redirect(`/dashboard/employer?error=${encodeURIComponent(clearPreferredSkillsError.message)}`)
+      }
+      if (canonicalPreferredSkillIds.length > 0) {
+        const { error: preferredSkillLinkError } = await supabaseAction.from('internship_preferred_skill_items').insert(
+          canonicalPreferredSkillIds.map((skillId) => ({
+            internship_id: persistedInternshipId,
+            skill_id: skillId,
+          }))
+        )
+        if (preferredSkillLinkError) {
+          redirect(`/dashboard/employer?error=${encodeURIComponent(preferredSkillLinkError.message)}`)
+        }
+      }
+
+      const { error: clearCourseCategoriesError } = await supabaseAction
+        .from('internship_required_course_categories')
+        .delete()
+        .eq('internship_id', persistedInternshipId)
+      if (clearCourseCategoriesError) {
+        redirect(`/dashboard/employer?error=${encodeURIComponent(clearCourseCategoriesError.message)}`)
+      }
+      if (selectedRequiredCourseCategoryIds.length > 0) {
+        const { error: courseCategoryInsertError } = await supabaseAction
+          .from('internship_required_course_categories')
+          .insert(
+            selectedRequiredCourseCategoryIds.map((categoryId) => ({
+              internship_id: persistedInternshipId,
+              category_id: categoryId,
+            }))
+          )
+        if (courseCategoryInsertError) {
+          redirect(`/dashboard/employer?error=${encodeURIComponent(courseCategoryInsertError.message)}`)
+        }
+      }
+
+      const { error: clearMajorLinksError } = await supabaseAction
+        .from('internship_major_links')
+        .delete()
+        .eq('internship_id', persistedInternshipId)
+      if (clearMajorLinksError) {
+        redirect(`/dashboard/employer?error=${encodeURIComponent(clearMajorLinksError.message)}`)
+      }
+      if (selectedMajorIds.length > 0) {
+        const { error: majorLinkInsertError } = await supabaseAction
+          .from('internship_major_links')
+          .insert(
+            selectedMajorIds.map((majorId) => ({
+              internship_id: persistedInternshipId,
+              major_id: majorId,
+            }))
+          )
+        if (majorLinkInsertError) {
+          redirect(`/dashboard/employer?error=${encodeURIComponent(majorLinkInsertError.message)}`)
+        }
+      }
     }
 
+    await trackAnalyticsEvent({
+      eventName: isPublishing ? 'employer_listing_published' : 'employer_listing_draft_saved',
+      userId: currentUser.id,
+      properties: { internship_id: persistedInternshipId ?? internshipId ?? null, mode: createMode },
+    })
+
     if (internshipId.length > 0) {
-      redirect('/dashboard/employer?success=Listing+updated')
+      redirect(`/dashboard/employer?success=${isPublishing ? 'Listing+updated' : 'Draft+saved'}`)
     }
     redirect(`/dashboard/employer?success=${isPublishing ? 'Listing+published' : 'Draft+saved'}`)
+  }
+
+  async function publishDraft(formData: FormData) {
+    'use server'
+
+    const { user: currentUser } = await requireRole('employer', { requestedPath: '/dashboard/employer' })
+    const supabaseAction = await supabaseServer()
+    const internshipId = String(formData.get('internship_id') ?? '').trim()
+    if (!internshipId) redirect('/dashboard/employer?error=Missing+draft+id')
+
+    const verificationGate = guardEmployerInternshipPublish(currentUser)
+    if (!verificationGate.ok) {
+      redirect(verificationGate.redirectTo)
+    }
+
+    const { data: draft } = await supabaseAction
+      .from('internships')
+      .select(
+        'id, title, employer_id, work_mode, location_city, location_state, pay, pay_min, pay_max, hours_min, hours_max, term, majors, short_summary, description, target_student_year, target_student_years, desired_coursework_strength, remote_eligibility_scope, remote_eligible_states, remote_eligible_state, apply_mode, external_apply_url, internship_required_skill_items(skill_id), internship_required_course_categories(category_id)'
+      )
+      .eq('id', internshipId)
+      .eq('employer_id', currentUser.id)
+      .maybeSingle()
+
+    if (!draft?.id) {
+      redirect('/dashboard/employer?error=Draft+not+found')
+    }
+
+    const requiredSkillIds = (draft.internship_required_skill_items ?? [])
+      .map((item) => item.skill_id)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    const requiredCourseCategoryIds = (draft.internship_required_course_categories ?? [])
+      .map((item) => item.category_id)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0)
+
+    const publishValidation = validateListingForPublish({
+      title: draft.title,
+      employerId: draft.employer_id,
+      workMode: draft.work_mode,
+      locationCity: draft.location_city,
+      locationState: draft.location_state,
+      payText: draft.pay,
+      payMinHourly: draft.pay_min,
+      payMaxHourly: draft.pay_max,
+      hoursMin: draft.hours_min,
+      hoursMax: draft.hours_max,
+      term: draft.term,
+      majors: draft.majors,
+      shortSummary: draft.short_summary,
+      description: draft.description,
+      requiredSkillIds,
+      requiredCourseCategoryIds,
+      targetStudentYear: draft.target_student_year,
+      targetStudentYears: Array.isArray(draft.target_student_years) ? draft.target_student_years : [],
+      desiredCourseworkStrength: draft.desired_coursework_strength,
+      remoteEligibleState: draft.remote_eligible_state,
+      remoteEligibilityScope: draft.remote_eligibility_scope,
+      remoteEligibleStates: Array.isArray(draft.remote_eligible_states) ? draft.remote_eligible_states : [],
+      applyMode: draft.apply_mode,
+      externalApplyUrl: draft.external_apply_url,
+    })
+
+    if (!publishValidation.ok) {
+      redirect(`/dashboard/employer?create=1&edit=${encodeURIComponent(internshipId)}&code=${publishValidation.code}`)
+    }
+
+    const strictValidation = validateInternshipInput({
+      work_mode: draft.work_mode,
+      term: draft.term,
+      hours_min: draft.hours_min,
+      hours_max: draft.hours_max,
+      location_city: draft.location_city,
+      location_state: draft.location_state,
+      required_skills: '',
+      required_skill_ids: requiredSkillIds,
+      required_course_category_ids: requiredCourseCategoryIds,
+      target_student_year: draft.target_student_year,
+      target_student_years: Array.isArray(draft.target_student_years) ? draft.target_student_years : [],
+      desired_coursework_strength: draft.desired_coursework_strength,
+      pay_min: draft.pay_min,
+      pay_max: draft.pay_max,
+      remote_eligible_state: draft.remote_eligible_state,
+      remote_eligibility_scope: draft.remote_eligibility_scope,
+      remote_eligible_states: Array.isArray(draft.remote_eligible_states) ? draft.remote_eligible_states : [],
+    })
+    if (!strictValidation.ok) {
+      redirect(`/dashboard/employer?create=1&edit=${encodeURIComponent(internshipId)}&code=${strictValidation.code}`)
+    }
+
+    const { error } = await supabaseAction
+      .from('internships')
+      .update({ status: 'published', is_active: true })
+      .eq('id', internshipId)
+      .eq('employer_id', currentUser.id)
+    if (error) {
+      redirect(`/dashboard/employer?error=${encodeURIComponent(error.message)}`)
+    }
+
+    await trackAnalyticsEvent({
+      eventName: 'employer_listing_published',
+      userId: currentUser.id,
+      properties: { internship_id: internshipId, mode: 'publish_draft' },
+    })
+
+    redirect('/dashboard/employer?success=Draft+published')
+  }
+
+  async function deleteDraft(formData: FormData) {
+    'use server'
+
+    const { user: currentUser } = await requireRole('employer', { requestedPath: '/dashboard/employer' })
+    const supabaseAction = await supabaseServer()
+    const internshipId = String(formData.get('internship_id') ?? '').trim()
+    if (!internshipId) redirect('/dashboard/employer?error=Missing+draft+id')
+
+    const { error } = await supabaseAction
+      .from('internships')
+      .delete()
+      .eq('id', internshipId)
+      .eq('employer_id', currentUser.id)
+      .neq('status', 'published')
+
+    if (error) {
+      redirect(`/dashboard/employer?error=${encodeURIComponent(error.message)}`)
+    }
+
+    redirect('/dashboard/employer?success=Draft+deleted')
   }
 
   async function createConciergeRequest(formData: FormData) {
@@ -507,25 +891,31 @@ export default async function EmployerDashboardPage({
     resolvedSearchParams?.create === '1' ||
     Boolean(createInternshipError) ||
     Boolean(editingInternshipId)
-  const editingTermRange = inferRangeFromTerm(editingInternship?.term ?? '')
   const isEditingListing = Boolean(editingInternship?.id)
+  const employerBaseState = normalizeStateCode(String(employerProfile?.location_state ?? ''))
   const showConciergeForm =
     launchConciergeEnabled &&
     (resolvedSearchParams?.concierge === '1' ||
       resolvedSearchParams?.concierge_success === '1' ||
       Boolean(resolvedSearchParams?.concierge_error))
+  const draftInternships = (internships ?? []).filter((internship) => internship.status !== 'published' && !internship.is_active)
+  const publishedInternships = (internships ?? []).filter((internship) => internship.status === 'published' || internship.is_active)
 
   return (
     <main className="min-h-screen bg-white">
       <section className="mx-auto max-w-5xl px-6 py-10">
         <div className="mb-3">
-          <Link
-            href={createOnly ? '/dashboard/employer' : '/'}
-            aria-label="Go back"
-            className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </Link>
+          {createOnly ? (
+            <BackWithFallbackButton fallbackHref="/dashboard/employer" />
+          ) : (
+            <Link
+              href="/"
+              aria-label="Go back"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition-opacity hover:opacity-70 focus:outline-none"
+            >
+              <ArrowLeft className="h-5 w-5" />
+            </Link>
+          )}
         </div>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -537,13 +927,7 @@ export default async function EmployerDashboardPage({
         </div>
 
         {!createOnly ? (
-        <div className="mt-5 grid gap-2 sm:grid-cols-4">
-          <Link
-            href="/dashboard/employer/new"
-            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Create new internship
-          </Link>
+        <div className="mt-5 grid gap-2 sm:grid-cols-3">
           <Link
             href="/dashboard/employer"
             className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
@@ -587,48 +971,106 @@ export default async function EmployerDashboardPage({
               You have not created any internships yet.
             </div>
           ) : (
-            <div className="mt-4 grid gap-3">
-              {internships.map((internship) => (
-                <div key={internship.id} className="rounded-xl border border-slate-200 p-4">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <div className="text-sm font-semibold text-slate-900">{internship.title}</div>
-                      <div className="text-xs text-slate-500">
-                        {internship.location} • {internship.is_active ? 'Published' : 'Draft'}
-                        {internship.work_mode ? ` • ${internship.work_mode}` : ''}
+            <div className="mt-4 space-y-6">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Published</h3>
+                {publishedInternships.length === 0 ? (
+                  <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">No published listings yet.</div>
+                ) : (
+                  <div className="mt-2 grid gap-3">
+                    {publishedInternships.map((internship) => (
+                      <div key={internship.id} className="rounded-xl border border-slate-200 p-4">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <div className="text-sm font-semibold text-slate-900">{internship.title || 'Untitled listing'}</div>
+                            <div className="text-xs text-slate-500">
+                              {internship.location} • Published
+                              {internship.work_mode ? ` • ${internship.work_mode}` : ''}
+                            </div>
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            Target years: {formatTargetStudentYears(internship.target_student_years ?? [internship.target_student_year])}
+                          </div>
+                        </div>
+                        {internship.majors && (
+                          <div className="mt-2 text-xs text-slate-500">
+                            Majors: {formatMajors(internship.majors)}
+                          </div>
+                        )}
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Link
+                            href={`/jobs/${internship.id}`}
+                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            View details
+                          </Link>
+                          <Link
+                            href={`/inbox?internship_id=${encodeURIComponent(internship.id)}`}
+                            className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                          >
+                            Applicants
+                          </Link>
+                          <Link
+                            href={`/dashboard/employer/new?edit=${encodeURIComponent(internship.id)}`}
+                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Edit
+                          </Link>
+                        </div>
                       </div>
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      {internship.experience_level ? `Level: ${internship.experience_level}` : 'Level: n/a'}
-                    </div>
+                    ))}
                   </div>
-                  {internship.majors && (
-                    <div className="mt-2 text-xs text-slate-500">
-                      Majors: {formatMajors(internship.majors)}
-                    </div>
-                  )}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Link
-                      href={`/jobs/${internship.id}`}
-                      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      View details
-                    </Link>
-                    <Link
-                      href={`/inbox?internship_id=${encodeURIComponent(internship.id)}`}
-                      className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
-                    >
-                      Applicants
-                    </Link>
-                    <Link
-                      href={`/dashboard/employer/new?edit=${encodeURIComponent(internship.id)}`}
-                      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Edit
-                    </Link>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">Drafts</h3>
+                {draftInternships.length === 0 ? (
+                  <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">No drafts saved.</div>
+                ) : (
+                  <div className="mt-2 grid gap-3">
+                    {draftInternships.map((internship) => (
+                      <div key={internship.id} className="rounded-xl border border-slate-200 p-4">
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <div className="text-sm font-semibold text-slate-900">{internship.title || 'Untitled draft'}</div>
+                            <div className="text-xs text-slate-500">
+                              Last updated: {internship.updated_at ? new Date(internship.updated_at).toLocaleString() : 'n/a'}
+                            </div>
+                          </div>
+                          <div className="text-xs text-slate-500">Status: Draft</div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Link
+                            href={`/dashboard/employer/new?edit=${encodeURIComponent(internship.id)}`}
+                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Edit draft
+                          </Link>
+                          <form action={publishDraft}>
+                            <input type="hidden" name="internship_id" value={internship.id} />
+                            <button
+                              type="submit"
+                              className="rounded-md border border-blue-300 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                            >
+                              Publish
+                            </button>
+                          </form>
+                          <form action={deleteDraft}>
+                            <input type="hidden" name="internship_id" value={internship.id} />
+                            <button
+                              type="submit"
+                              className="rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                            >
+                              Delete
+                            </button>
+                          </form>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                </div>
-              ))}
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -645,7 +1087,7 @@ export default async function EmployerDashboardPage({
                 href="/dashboard/employer/new"
                 className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
               >
-                + New internship
+                Create internship
               </Link>
               {launchConciergeEnabled ? (
                 <Link
@@ -669,12 +1111,6 @@ export default async function EmployerDashboardPage({
                   Send us the internship details and our team will publish it for you.
                 </p>
               </div>
-              <Link
-                href={createOnly ? '/dashboard/employer' : '/dashboard/employer'}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Hide form
-              </Link>
             </div>
 
             {resolvedSearchParams?.concierge_success === '1' ? (
@@ -781,12 +1217,6 @@ export default async function EmployerDashboardPage({
                   Share the core fields students scan first: work mode, pay, hours, timeline, and fit summary.
                 </p>
               </div>
-              <Link
-                href="/dashboard/employer"
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Hide form
-              </Link>
             </div>
 
             {createInternshipError && (
@@ -799,321 +1229,55 @@ export default async function EmployerDashboardPage({
                 {decodeURIComponent(resolvedSearchParams.success)}
               </div>
             )}
-
-            <form action={createInternship} className="mt-5 grid gap-4 sm:grid-cols-2">
-              <input type="hidden" name="internship_id" value={editingInternship?.id ?? ''} />
-
-              <div className="sm:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Title</label>
-                <input
-                  name="title"
-                  required
-                  defaultValue={editingInternship?.title ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
-                  placeholder="e.g., Finance Intern"
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Company name</label>
-                <input
-                  name="company_name"
-                  defaultValue={editingInternship?.company_name ?? employerProfile?.company_name ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
-                  placeholder="e.g., Canyon Capital"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium text-slate-700">Category</label>
-                <select
-                  name="category"
-                  required
-                  defaultValue={editingInternship?.category ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900"
-                >
-                  <option value="" disabled>
-                    Select category
-                  </option>
-                  {['Finance', 'Accounting', 'Data', 'Marketing', 'Operations', 'Product', 'Design', 'Sales', 'HR', 'Engineering'].map((categoryOption) => (
-                    <option key={categoryOption} value={categoryOption}>
-                      {categoryOption}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-sm font-medium text-slate-700">Experience level</label>
-                <select
-                  name="experience_level"
-                  required
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900"
-                  defaultValue={editingInternship?.experience_level ?? 'entry'}
-                >
-                  <option value="entry">Entry</option>
-                  <option value="mid">Mid</option>
-                  <option value="senior">Senior</option>
-                </select>
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Work mode</label>
-                <div className="mt-1 grid grid-cols-3 gap-2">
-                  {[
-                    { value: 'on-site', label: 'On-site' },
-                    { value: 'hybrid', label: 'Hybrid' },
-                    { value: 'remote', label: 'Remote' },
-                  ].map((option) => {
-                    const checked = (editingInternship?.work_mode ?? '') === option.value || (!editingInternship?.work_mode && option.value === 'hybrid')
-                    return (
-                      <label key={option.value} className="flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700">
-                        <input type="radio" name="work_mode" value={option.value} defaultChecked={checked} required />
-                        {option.label}
-                      </label>
-                    )
-                  })}
-                </div>
-                {createInternshipError?.field === 'work_mode' && (
-                  <p className="mt-1 text-xs text-red-600">{createInternshipError.message}</p>
-                )}
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Remote eligibility (optional)</label>
-                <input
-                  name="remote_eligibility"
-                  defaultValue={editingInternship?.remote_eligibility ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
-                  placeholder="e.g., US only, Utah only"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium text-slate-700">Start month</label>
-                <select
-                  name="start_month"
-                  required
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900"
-                  defaultValue={editingTermRange.startMonth}
-                >
-                  <option value="" disabled>
-                    Select start month
-                  </option>
-                  {monthOptions.map((monthOption) => (
-                    <option key={`start-${monthOption}`} value={monthOption}>
-                      {monthOption}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-sm font-medium text-slate-700">Start year</label>
-                <select
-                  name="start_year"
-                  required
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900"
-                  defaultValue={editingTermRange.startYear}
-                >
-                  <option value="" disabled>
-                    Select start year
-                  </option>
-                  {startYearOptions.map((yearOption) => (
-                    <option key={`year-${yearOption}`} value={yearOption}>
-                      {yearOption}
-                    </option>
-                  ))}
-                </select>
-                {createInternshipError?.field === 'term' && (
-                  <p className="mt-1 text-xs text-red-600">{createInternshipError.message}</p>
-                )}
-              </div>
-              <div>
-                <label className="text-sm font-medium text-slate-700">End month</label>
-                <select
-                  name="end_month"
-                  required
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900"
-                  defaultValue={editingTermRange.endMonth}
-                >
-                  <option value="" disabled>
-                    Select end month
-                  </option>
-                  {monthOptions.map((monthOption) => (
-                    <option key={`end-${monthOption}`} value={monthOption}>
-                      {monthOption}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-sm font-medium text-slate-700">End year</label>
-                <select
-                  name="end_year"
-                  required
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900"
-                  defaultValue={editingTermRange.endYear}
-                >
-                  <option value="" disabled>
-                    Select end year
-                  </option>
-                  {endYearOptions.map((yearOption) => (
-                    <option key={`end-year-${yearOption}`} value={yearOption}>
-                      {yearOption}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="sm:col-span-2">
-                <InternshipLocationFields
-                  defaultCity={editingInternship?.location_city ?? ''}
-                  defaultState={editingInternship?.location_state ?? ''}
-                  labelClassName="text-sm font-medium text-slate-700"
-                  selectClassName="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900"
-                  errorMessage={createInternshipError?.field === 'location' ? createInternshipError.message : null}
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium text-slate-700">Hours min/week</label>
-                <input
-                  name="hours_min"
-                  required
-                  type="number"
-                  min={1}
-                  max={80}
-                  defaultValue={editingInternship?.hours_min ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
-                  placeholder="10"
-                />
-              </div>
-
-              <div>
-                <label className="text-sm font-medium text-slate-700">Hours max/week</label>
-                <input
-                  name="hours_max"
-                  required
-                  type="number"
-                  min={1}
-                  max={80}
-                  defaultValue={editingInternship?.hours_max ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
-                  placeholder="20"
-                />
-                {createInternshipError?.field === 'hours' && (
-                  <p className="mt-1 text-xs text-red-600">{createInternshipError.message}</p>
-                )}
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Pay range</label>
-                <input
-                  name="pay"
-                  required
-                  defaultValue={editingInternship?.pay ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
-                  placeholder="$20-$28/hr"
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Majors</label>
-                <input
-                  name="majors"
-                  required
-                  defaultValue={formatMajors(editingInternship?.majors ?? '')}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
-                  placeholder="Finance, Accounting, Economics"
-                />
-                <p className="mt-1 text-xs text-slate-500">Use a comma-separated list.</p>
-              </div>
-
-              <div className="sm:col-span-2">
-                <CatalogMultiSelect
-                  label="Required skills"
-                  fieldName="required_skills"
-                  idsFieldName="required_skill_ids"
-                  customFieldName="required_skill_custom"
-                  inputId="employer-required-skills-input"
-                  options={skillCatalog}
-                  initialLabels={initialRequiredSkillLabels}
-                  helperText="Type to select canonical skills. Enter adds custom text if no exact match."
-                />
-                {createInternshipError?.field === 'required_skills' && (
-                  <p className="mt-1 text-xs text-red-600">{createInternshipError.message}</p>
-                )}
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Short summary (1-2 sentences)</label>
-                <textarea
-                  name="short_summary"
-                  required
-                  rows={2}
-                  defaultValue={editingInternship?.short_summary ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
-                  placeholder="One-line preview students see on listing cards."
-                />
-                {createInternshipError?.field === 'short_summary' ? (
-                  <p className="mt-1 text-xs text-red-600">{createInternshipError.message}</p>
-                ) : null}
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Application deadline (optional)</label>
-                <input
-                  name="application_deadline"
-                  type="date"
-                  defaultValue={editingInternship?.application_deadline ?? editingInternship?.apply_deadline ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900"
-                />
-                {createInternshipError?.field === 'application_deadline' && (
-                  <p className="mt-1 text-xs text-red-600">{createInternshipError.message}</p>
-                )}
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="text-sm font-medium text-slate-700">Description</label>
-                <textarea
-                  name="description"
-                  required
-                  defaultValue={editingInternship?.description ?? ''}
-                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-400"
-                  rows={5}
-                  placeholder="Describe responsibilities and what a great candidate looks like."
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                {plan.id === 'free' ? (
-                  <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                    Quick human check required for free/unverified employers when publishing.
-                  </div>
-                ) : null}
-                {plan.id === 'free' ? <TurnstileWidget action="create_internship" className="mb-3" /> : null}
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <button
-                    type="submit"
-                    name="create_mode"
-                    value="publish"
-                    className="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-                  >
-                    {isEditingListing ? 'Update & publish' : 'Publish internship'}
-                  </button>
-                  <button
-                    type="submit"
-                    name="create_mode"
-                    value="draft"
-                    formNoValidate
-                    className="inline-flex w-full items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    {isEditingListing ? 'Save changes as draft' : 'Save draft'}
-                  </button>
-                </div>
-              </div>
-            </form>
+            <ListingWizard
+              formId="employer-create-internship-form"
+              formAction={createInternship}
+              internshipId={editingInternship?.id ?? ''}
+              userId={user.id}
+              draftKey={editingInternship?.id ?? 'new'}
+              clearOnSuccess={Boolean(resolvedSearchParams?.success)}
+              initialValues={{
+                title: editingInternship?.title ?? '',
+                companyName: editingInternship?.company_name ?? employerProfile?.company_name ?? '',
+                category: editingInternship?.category ?? '',
+                workMode: (editingInternship?.work_mode as 'on-site' | 'hybrid' | 'remote' | null) ?? 'hybrid',
+                locationCity: editingInternship?.location_city ?? '',
+                locationState: editingInternship?.location_state ?? '',
+                applyMode:
+                  (editingInternship?.apply_mode as 'native' | 'ats_link' | 'hybrid' | null) ??
+                  (plan.id === 'free' ? 'native' : 'ats_link'),
+                externalApplyUrl: editingInternship?.external_apply_url ?? '',
+                externalApplyType: editingInternship?.external_apply_type ?? '',
+                payType: 'hourly',
+                payMin: String(editingInternship?.pay_min ?? '20'),
+                payMax: String(editingInternship?.pay_max ?? '28'),
+                hoursMin: String(editingInternship?.hours_min ?? '15'),
+                hoursMax: String(editingInternship?.hours_max ?? '25'),
+                durationWeeks: '12',
+                startDate: '',
+                applicationDeadline: editingInternship?.application_deadline ?? editingInternship?.apply_deadline ?? '',
+                shortSummary: editingInternship?.short_summary ?? '',
+                description: editingInternship?.description ?? '',
+                responsibilities: Array.isArray(editingInternship?.responsibilities)
+                  ? editingInternship.responsibilities.map((item) => `- ${item}`).join('\n')
+                  : '',
+                qualifications: Array.isArray(editingInternship?.qualifications)
+                  ? editingInternship.qualifications.map((item) => `- ${item}`).join('\n')
+                  : '',
+                screeningQuestion: '',
+                resumeRequired: editingInternship?.resume_required !== false,
+                requiredSkillLabels: initialRequiredSkillLabels,
+                preferredSkillLabels: Array.isArray(editingInternship?.preferred_skills) ? editingInternship.preferred_skills : [],
+                majorLabels: initialMajorLabels,
+                courseworkCategoryLabels: initialRequiredCourseCategoryLabels,
+              }}
+              categoryOptions={[...INTERNSHIP_CATEGORIES]}
+              skillCatalog={skillCatalog}
+              majorCatalog={canonicalMajorCatalog}
+              courseworkCategoryCatalog={courseCategoryCatalog}
+              employerBaseState={employerBaseState}
+              showTurnstile={plan.id === 'free'}
+            />
           </div>
         ) : null}
       </section>

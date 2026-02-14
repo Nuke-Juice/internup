@@ -1,0 +1,28 @@
+export const INTERNSHIP_CATEGORIES = [
+  'Finance',
+  'Accounting',
+  'Economics',
+  'Real Estate',
+  'Data Analytics',
+  'Software/IT',
+  'Cybersecurity',
+  'Product',
+  'Design',
+  'Marketing',
+  'Sales',
+  'Operations',
+  'Supply Chain',
+  'HR',
+  'Legal',
+  'Healthcare Admin',
+  'Engineering',
+  'Construction/Project Mgmt',
+  'Customer Success',
+  'Research',
+  'Nonprofit/Public Sector',
+  'Education',
+  'Media/Communications',
+  'Strategy/Consulting',
+] as const
+
+export type InternshipCategory = (typeof INTERNSHIP_CATEGORIES)[number]

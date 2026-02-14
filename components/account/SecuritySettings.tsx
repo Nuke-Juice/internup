@@ -2,53 +2,31 @@
 
 import { useState } from 'react'
 import { supabaseBrowser } from '@/lib/supabase/client'
-import PressRevealPasswordField from '@/components/forms/PressRevealPasswordField'
 
-type Props = {
-  email: string
-}
-
-function getPasswordError(password: string) {
-  if (password.length < 8) return 'Password must be at least 8 characters.'
-  if (!/[A-Z]/.test(password)) return 'Password must include at least one uppercase letter.'
-  if (!/[a-z]/.test(password)) return 'Password must include at least one lowercase letter.'
-  if (!/[0-9]/.test(password)) return 'Password must include at least one number.'
-  return null
-}
+type Props = { email: string }
 
 export default function SecuritySettings({ email }: Props) {
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [revealingPasswords, setRevealingPasswords] = useState(false)
-  const [updatingPassword, setUpdatingPassword] = useState(false)
+  const [sendingReset, setSendingReset] = useState(false)
   const [deletingAccount, setDeletingAccount] = useState(false)
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
-  async function updatePassword() {
+  async function sendResetEmail() {
     setPasswordError(null)
     setPasswordSuccess(null)
-
-    const passwordErrorMessage = getPasswordError(password)
-    if (passwordErrorMessage) return setPasswordError(passwordErrorMessage)
-    if (password !== confirmPassword) {
-      return setPasswordError('Passwords do not match.')
-    }
-
-    setUpdatingPassword(true)
+    setSendingReset(true)
     const supabase = supabaseBrowser()
-    const { error } = await supabase.auth.updateUser({ password })
-    setUpdatingPassword(false)
+    const redirectTo = `${window.location.origin}/reset-password`
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo })
+    setSendingReset(false)
 
     if (error) {
       setPasswordError(error.message)
       return
     }
 
-    setPassword('')
-    setConfirmPassword('')
-    setPasswordSuccess('Password updated.')
+    setPasswordSuccess('Password reset link sent. Check your email to confirm and complete password change.')
   }
 
   async function deleteAccount() {
@@ -77,42 +55,21 @@ export default function SecuritySettings({ email }: Props) {
     <div className="space-y-6">
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900">Password</h2>
-        <p className="mt-1 text-sm text-slate-600">Signed in as {email}</p>
+        <p className="mt-1 text-sm text-slate-600">
+          Signed in as {email}. Password changes are confirmed by email for account security.
+        </p>
 
         <div className="mt-4 grid gap-4 sm:max-w-md">
-          <div>
-            <label className="text-sm font-medium text-slate-700">New password</label>
-            <PressRevealPasswordField
-              className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="At least 8 characters"
-              revealed={revealingPasswords}
-              onRevealChange={setRevealingPasswords}
-            />
-          </div>
-          <div>
-            <label className="text-sm font-medium text-slate-700">Confirm new password</label>
-            <PressRevealPasswordField
-              className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900"
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              placeholder="Re-enter password"
-              revealed={revealingPasswords}
-              onRevealChange={setRevealingPasswords}
-            />
-          </div>
-
           {passwordError ? <p className="text-sm text-red-600">{passwordError}</p> : null}
           {passwordSuccess ? <p className="text-sm text-emerald-700">{passwordSuccess}</p> : null}
 
           <button
             type="button"
-            onClick={updatePassword}
-            disabled={updatingPassword}
+            onClick={sendResetEmail}
+            disabled={sendingReset}
             className="inline-flex h-10 items-center justify-center rounded-md bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
           >
-            {updatingPassword ? 'Updating...' : 'Update password'}
+            {sendingReset ? 'Sending reset email...' : 'Send password reset email'}
           </button>
         </div>
       </section>

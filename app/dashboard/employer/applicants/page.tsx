@@ -9,6 +9,7 @@ import { requireRole } from '@/lib/auth/requireRole'
 import { supabaseServer } from '@/lib/supabase/server'
 import ApplicantsInboxGroup from '@/app/dashboard/employer/_components/ApplicantsInboxGroup'
 import ApplicantsSortControls, { type ApplicantsSort } from '@/app/dashboard/employer/_components/ApplicantsSortControls'
+import DismissibleUpgradeBanner from '@/app/dashboard/employer/_components/DismissibleUpgradeBanner'
 
 type SearchParams = Promise<{
   sort?: string
@@ -34,6 +35,10 @@ type ApplicationRow = {
   status: string | null
   reviewed_at: string | null
   notes: string | null
+  external_apply_required: boolean | null
+  external_apply_completed_at: string | null
+  external_apply_clicks: number | null
+  external_apply_last_clicked_at: string | null
 }
 
 function normalizeSort(value: string | undefined): ApplicantsSort {
@@ -199,7 +204,9 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
   if (scopedInternshipIds.length > 0) {
     let query = supabase
       .from('applications')
-      .select('id, internship_id, student_id, created_at, match_score, match_reasons, resume_url, status, reviewed_at, notes')
+      .select(
+        'id, internship_id, student_id, created_at, match_score, match_reasons, resume_url, status, reviewed_at, notes, external_apply_required, external_apply_completed_at, external_apply_clicks, external_apply_last_clicked_at'
+      )
       .in('internship_id', scopedInternshipIds)
 
     if (selectedStatusFilter !== 'all') {
@@ -217,6 +224,8 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
   }
 
   const studentIds = Array.from(new Set(applications.map((row) => row.student_id)))
+  const quickApplicantsCount = applications.filter((row) => Boolean(row.external_apply_required)).length
+  const pendingExternalCount = applications.filter((row) => Boolean(row.external_apply_required) && !row.external_apply_completed_at).length
   const { data: profiles } =
     studentIds.length > 0
       ? await supabase
@@ -476,12 +485,7 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
           </form>
         ) : null}
         {!features.rankedApplicants ? (
-          <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
-            Upgrade to unlock Best Match sorting and “Why this matches” reasons.
-            <Link href="/upgrade" className="ml-2 font-semibold underline">
-              View plans
-            </Link>
-          </div>
+          <DismissibleUpgradeBanner userId={user.id} />
         ) : !features.advancedApplicantFilters ? (
           <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
             Upgrade to Pro for readiness and advanced filters.
@@ -499,6 +503,18 @@ export default async function EmployerApplicantsPage({ searchParams }: { searchP
         {resolvedSearchParams?.updated ? (
           <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
             Application updated.
+          </div>
+        ) : null}
+        {quickApplicantsCount > 0 ? (
+          <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            ATS-linked listings are shown as <span className="font-semibold">Pre-applicants (Quick Apply)</span>.
+            <span className="ml-2">Quick applies: {quickApplicantsCount}. Pending external completion: {pendingExternalCount}.</span>
+            <Link
+              href={`/dashboard/employer/applicants/export${selectedInternshipId ? `?internship_id=${encodeURIComponent(selectedInternshipId)}` : ''}`}
+              className="ml-2 font-semibold underline"
+            >
+              Export shortlist (CSV)
+            </Link>
           </div>
         ) : null}
         {showClaimedBanner ? (

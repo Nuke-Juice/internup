@@ -4,6 +4,11 @@ export const INTERNSHIP_VALIDATION_ERROR = {
   INVALID_HOURS_RANGE: 'INVALID_HOURS_RANGE',
   LOCATION_REQUIRED: 'LOCATION_REQUIRED',
   REQUIRED_SKILLS_MISSING: 'REQUIRED_SKILLS_MISSING',
+  REQUIRED_COURSE_CATEGORIES_MISSING: 'REQUIRED_COURSE_CATEGORIES_MISSING',
+  TARGET_STUDENT_YEAR_REQUIRED: 'TARGET_STUDENT_YEAR_REQUIRED',
+  COURSEWORK_STRENGTH_REQUIRED: 'COURSEWORK_STRENGTH_REQUIRED',
+  INVALID_PAY_RANGE: 'INVALID_PAY_RANGE',
+  REMOTE_ELIGIBILITY_REQUIRED: 'REMOTE_ELIGIBILITY_REQUIRED',
   DEADLINE_INVALID: 'DEADLINE_INVALID',
 } as const
 
@@ -19,6 +24,15 @@ export type InternshipValidationInput = {
   location_state: string | null
   required_skills: string[] | string | null
   required_skill_ids?: string[] | string | null
+  required_course_category_ids?: string[] | string | null
+  target_student_year?: string | null
+  target_student_years?: string[] | null
+  desired_coursework_strength?: string | null
+  pay_min?: number | null
+  pay_max?: number | null
+  remote_eligible_state?: string | null
+  remote_eligibility_scope?: string | null
+  remote_eligible_states?: string[] | string | null
   application_deadline?: string | null
 }
 
@@ -64,8 +78,9 @@ export function validateInternshipInput(
   const term = normalizeText(input.term)
   const locationCity = normalizeText(input.location_city)
   const locationState = normalizeText(input.location_state)
-  const requiredSkills = parseList(input.required_skills)
-  const requiredSkillIds = parseList(input.required_skill_ids ?? null)
+  const remoteEligibleState = normalizeText(input.remote_eligible_state).toUpperCase()
+  const remoteEligibilityScope = normalizeText(input.remote_eligibility_scope).toLowerCase()
+  const remoteEligibleStates = parseList(input.remote_eligible_states ?? null)
   const deadline = normalizeText(input.application_deadline)
 
   if (!workMode) {
@@ -98,8 +113,20 @@ export function validateInternshipInput(
     return { ok: false, code: INTERNSHIP_VALIDATION_ERROR.LOCATION_REQUIRED }
   }
 
-  if (requiredSkillIds.length === 0 && requiredSkills.length === 0) {
-    return { ok: false, code: INTERNSHIP_VALIDATION_ERROR.REQUIRED_SKILLS_MISSING }
+  if (
+    typeof input.pay_min !== 'number' ||
+    typeof input.pay_max !== 'number' ||
+    !Number.isFinite(input.pay_min) ||
+    !Number.isFinite(input.pay_max) ||
+    input.pay_min < 0 ||
+    input.pay_max < input.pay_min
+  ) {
+    return { ok: false, code: INTERNSHIP_VALIDATION_ERROR.INVALID_PAY_RANGE }
+  }
+  if (workMode === 'remote' || workMode === 'hybrid') {
+    if (!remoteEligibleState && remoteEligibilityScope === 'us_states' && remoteEligibleStates.length === 0) {
+      return { ok: false, code: INTERNSHIP_VALIDATION_ERROR.REMOTE_ELIGIBILITY_REQUIRED }
+    }
   }
 
   if (deadline) {

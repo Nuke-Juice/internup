@@ -1,17 +1,8 @@
 'use client'
 
-const INDUSTRY_OPTIONS = [
-  'Finance',
-  'Accounting',
-  'Data',
-  'Marketing',
-  'Operations',
-  'Product',
-  'Design',
-  'Sales',
-  'HR',
-  'Engineering',
-]
+import { INTERNSHIP_CATEGORIES } from '@/lib/internships/categories'
+
+const INDUSTRY_OPTIONS = INTERNSHIP_CATEGORIES
 
 type Props = {
   fieldClassName: string

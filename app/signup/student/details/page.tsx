@@ -169,6 +169,9 @@ export default function StudentSignupDetailsPage() {
   function addCoursework(course: string) {
     const normalized = course.trim().replace(/\s+/g, ' ')
     if (!normalized) return
+    if (!courseworkCatalog.some((item) => item.toLowerCase() === normalized.toLowerCase())) {
+      return
+    }
     setCoursework((prev) => (prev.includes(normalized) ? prev : [...prev, normalized]))
     setCourseworkInput('')
   }
@@ -591,6 +594,40 @@ export default function StudentSignupDetailsPage() {
         }))
       )
       if (insertCourseworkItemsError) return setError(toUserFacingErrorMessage(insertCourseworkItemsError.message))
+    }
+
+    const { error: clearStudentCoursesError } = await supabase
+      .from('student_courses')
+      .delete()
+      .eq('student_profile_id', user.id)
+    if (clearStudentCoursesError) return setError(toUserFacingErrorMessage(clearStudentCoursesError.message))
+
+    const canonicalCourseTokens = normalizedCourseworkList.map((course) => course.toLowerCase())
+    if (canonicalCourseTokens.length > 0) {
+      const { data: canonicalCourseRows } = await supabase
+        .from('canonical_courses')
+        .select('id, code, name')
+        .in('name', normalizedCourseworkList)
+        .limit(200)
+
+      const matchedCanonicalIds = (canonicalCourseRows ?? [])
+        .filter((row) => {
+          const code = typeof row.code === 'string' ? row.code.toLowerCase() : ''
+          const name = typeof row.name === 'string' ? row.name.toLowerCase() : ''
+          return canonicalCourseTokens.includes(code) || canonicalCourseTokens.includes(name)
+        })
+        .map((row) => row.id)
+        .filter((id): id is string => typeof id === 'string')
+
+      if (matchedCanonicalIds.length > 0) {
+        const { error: insertStudentCoursesError } = await supabase.from('student_courses').insert(
+          matchedCanonicalIds.map((courseId) => ({
+            student_profile_id: user.id,
+            course_id: courseId,
+          }))
+        )
+        if (insertStudentCoursesError) return setError(toUserFacingErrorMessage(insertStudentCoursesError.message))
+      }
     }
 
     const [{ data: itemCategoryRows }, { error: clearCategoryLinksError }] = await Promise.all([

@@ -7,6 +7,7 @@ import { getMinimumProfileCompleteness } from '@/lib/profileCompleteness'
 import { buildApplicationMatchSnapshot } from '@/lib/applicationMatchSnapshot'
 import { sendEmployerApplicationAlert } from '@/lib/email/employerAlerts'
 import { guardApplicationSubmit, EMAIL_VERIFICATION_ERROR } from '@/lib/auth/verifiedActionGate'
+import { normalizeApplyMode, normalizeExternalApplyUrl } from '@/lib/apply/externalApply'
 
 type ApplyFromMicroOnboardingInput = {
   listingId: string
@@ -69,7 +70,7 @@ export async function applyFromMicroOnboardingAction({
     supabase
       .from('internships')
       .select(
-        'id, title, majors, target_graduation_years, experience_level, hours_per_week, location, description, work_mode, term, role_category, required_skills, preferred_skills, recommended_coursework, internship_coursework_category_links(category_id, category:coursework_categories(name))'
+        'id, title, majors, target_graduation_years, experience_level, hours_per_week, location, description, work_mode, term, role_category, required_skills, preferred_skills, recommended_coursework, apply_mode, external_apply_url, internship_coursework_category_links(category_id, category:coursework_categories(name))'
       )
       .eq('id', listingId)
       .eq('is_active', true)
@@ -152,6 +153,17 @@ export async function applyFromMicroOnboardingAction({
         .filter((value): value is string => typeof value === 'string'),
     },
   })
+  const applyMode = normalizeApplyMode(String(listing.apply_mode ?? 'native'))
+  const requiresExternalApply = applyMode === 'ats_link' || applyMode === 'hybrid'
+  const externalApplyUrl = normalizeExternalApplyUrl(String(listing.external_apply_url ?? ''))
+  if (requiresExternalApply && !externalApplyUrl) {
+    await trackAnalyticsEvent({
+      eventName: 'apply_blocked',
+      userId: user.id,
+      properties: { listing_id: listingId, code: APPLY_ERROR.APPLICATION_INSERT_FAILED, missing: ['external_apply_url_missing'] },
+    })
+    return { ok: false, code: APPLY_ERROR.APPLICATION_INSERT_FAILED }
+  }
 
   const { data: insertedApplication, error: insertError } = await supabase
     .from('applications')
@@ -160,6 +172,7 @@ export async function applyFromMicroOnboardingAction({
       student_id: user.id,
       resume_url: resumePath,
       status: 'submitted',
+      external_apply_required: requiresExternalApply,
       match_score: snapshot.match_score,
       match_reasons: snapshot.match_reasons,
       match_gaps: snapshot.match_gaps,
@@ -190,6 +203,11 @@ export async function applyFromMicroOnboardingAction({
     eventName: 'submit_apply_success',
     userId: user.id,
     properties: { listing_id: listingId, source: 'applyFromMicroOnboardingAction' },
+  })
+  await trackAnalyticsEvent({
+    eventName: 'quick_apply_submitted',
+    userId: user.id,
+    properties: { listing_id: listingId, application_id: insertedApplication?.id ?? null, apply_mode: applyMode },
   })
 
   if (insertedApplication?.id) {
